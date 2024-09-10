@@ -3,7 +3,7 @@
   :version "0.0.1"
   :author "Warren Wilkinson <warrenwilkinson@gmail.com>"
   :licence "GPLv3"
-  :depends-on ("mcclim" "osc"))
+  :depends-on ("mcclim" "osc" "cl-pipewire"))
   ;; :version (:read-file-form "variables" :at (3 2))
   ;; :components ((:file "package")
   ;; 	       (:file "variables" :depends-on ("package"))
