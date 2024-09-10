@@ -1,6 +1,11 @@
 
 
-# C2FFI
+
+sudo apt-get -y install libspa-0.2-dev
+
+
+
+# C2FFI (obsolete)
 
 C2FFI is used to investigate the pipewire C librarys and autogenerate
 some json files that can be distributed with the project.  Once those json
