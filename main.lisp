@@ -23,6 +23,13 @@
 (defvar *gio* (gir:require-namespace "Gio")) 
 (defvar *gtk* (gir:require-namespace "Gtk" "4.0")) ;; GTK 4.0
 
+;; Okay, how to handle drawing this thing?  lets just focus on the buttons
+;; I guess...   Where do those get positioned?  It's a tree I guess...
+
+;; First matrix positions the drawing within the drawing area (full size I suppose
+;; and maps it from 0 to 1 each way...   Maybe.. I want to preserve a good aspect
+;; ratio I think...
+
 (defstruct music-engine
   "My thing"
   (initialized-p nil :type boolean :read-only nil))
@@ -37,11 +44,30 @@
 
 (defvar *music-engine* (make-music-engine))
 
-(defun draw (cairo width height)
-  (let ((cl-cairo2:*context* cairo))
-    (cl-cairo2:rectangle 0 0 width height)
-    (cl-cairo2:set-source-rgb 0.2 0.2 0.5)
-    (cl-cairo2:fill-path)))
+(labels ((draw-instrument ()
+	   (cl-cairo2:rectangle 0.0 0.0 1.0 1.0)
+	   (cl-cairo2:set-source-rgb 1.0 0.2 0.5)
+	   (cl-cairo2:fill-path)))
+  (defun draw (cairo width height)
+    (let ((cl-cairo2:*context* cairo))
+      ;; Background
+      (cl-cairo2:rectangle 0 0 width height)
+      (cl-cairo2:set-source-rgb 0.2 0.2 0.5)
+      (cl-cairo2:fill-path)
+
+      ;; Position drawing space with fixed aspect ratio in the middle.
+      (let ((smaller-dim (min width height)))
+	;; Translate to middle
+	(cond ((= width smaller-dim)
+	       (cl-cairo2:translate 0 (truncate (- height smaller-dim) 2)))
+	      (t
+	       (cl-cairo2:translate (truncate (- width smaller-dim) 2) 0)))
+
+	;; Scale so drawing is 0 to 1 in both axis
+	(cl-cairo2:scale smaller-dim smaller-dim)
+
+	;; Now fill in the drawing region
+	(draw-instrument)))))
 
 (defun test-draw ()
   (let* ((width 200)
@@ -63,7 +89,7 @@
 			      :pointer cairo))
 	;; (gtk-drawing-area (gir:build-object-ptr (gir:nget-desc *gtk* "DrawingArea") gtk-drawing-area))
 	)
-    (draw cairo width height)))
+    (ignore-errors (draw cairo width height))))
 
 (cffi:defcallback cleanup-draw-thing :void ((user-data :pointer))
   (declare (ignore user-data))
