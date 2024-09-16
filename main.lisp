@@ -23,12 +23,89 @@
 (defvar *gio* (gir:require-namespace "Gio")) 
 (defvar *gtk* (gir:require-namespace "Gtk" "4.0")) ;; GTK 4.0
 
+
+;; Okay, divide the problem... EVERY THING draws in a 1x1 box. Not sure about
+;; stroke widths... but there you go... wait even this doesn't work exactly...
+;; Subdividing is correct --- but things change position, clicks happen, etc...
+;; There is definitely "STATE" being passed in... GUI state stuff...
+;; For example, an LED has state "ON" or "OFF".
+
+(defstruct gui-basic-led-state
+  "This stuff changes at run-time."
+  (illuminated nil :type boolean :read-only nil))
+
+(defstruct cairo-color
+  (r 0.0d0 :type double-float :read-only t)
+  (g 0.0d0 :type double-float :read-only t)
+  (b 0.0d0 :type double-float :read-only t)
+  (a 1.0d0 :type double-float :read-only t))
+
+(defparameter *black* (make-cairo-color :r 0.0d0 :g 0.0d0 :b 0.0d0))
+(defparameter *basic-led-red-on*  (make-cairo-color :r 0.6d0 :g 0.0d0 :b 0.0d0))
+(defparameter *basic-led-red-off* (make-cairo-color :r 0.2d0 :g 0.0d0 :b 0.0d0))
+(defparameter *basic-led-red-glow* (make-cairo-color :r 1.0d0 :g 0.1d0 :b 0.3d0 :a 0.3d0))
+(defparameter *basic-led-green-on*  (make-cairo-color :r 0.0d0 :g 0.6d0 :b 0.0d0))
+(defparameter *basic-led-green-off* (make-cairo-color :r 0.0d0 :g 0.2d0 :b 0.0d0))
+(defparameter *basic-led-green-glow* (make-cairo-color :r 0.3d0 :g 1.0d0 :b 0.3d0 :a 0.3d0))
+
+(defstruct gui-basic-led-parameters
+  "This stuff changes at design time."
+  (on-color nil :type cairo-color :read-only t)
+  (off-color nil :type cairo-color :read-only t)
+  (glow-color nil :type cairo-color :read-only t)
+  (stroke-width nil :type double-float :read-only t)
+  (stroke-color *black* :type cairo-color :read-only t))
+
+(defstruct gui-label-state)
+
+(defstruct gui-label-parameters
+  "This stuff changes at run-time."
+  (text nil :type string :read-only nil)
+  (font nil :type string :read-only t)
+  (font-size 1.0d0 :type double-float :read-only t))
+
+;; The recursion metadata is what's tricky... because it might includes things like
+;; what covers what, where the button is...  Do things move?  For example, a wammy
+;; bar might MOVE when clicked... how does that get communicated?   I think
+;; the best approach is it DOESN'T.
+
+(defun cairo-draw-basic-led (parameters state)
+  (with-slots (on-color off-color glow-color stroke-width stroke-color) parameters
+    (with-slots (illuminated) state
+      (cl-cairo2:arc 0.5d0 0.5d0 0.4d0 0.0 (* 2 pi))
+      (with-slots (r g b a) (if illuminated on-color off-color)
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-path)
+
+      (cl-cairo2:set-line-width stroke-width)
+      (cl-cairo2:arc 0.5d0 0.5d0 0.4d0 0.0 (* 2 pi))
+      (with-slots (r g b a) stroke-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:stroke)
+
+      (when illuminated
+	(with-slots (r g b a) glow-color
+	  (dotimes (rev-x 3)
+	    (let* ((x (- 3 rev-x))
+		   (current-a (* (/ x 3) a))
+		   (current-r (+ .4d0 (* (/ x 3) .1d0))))
+	      (cl-cairo2:arc 0.5d0 0.5d0 current-r 0.0 (* 2 pi))
+	      (cl-cairo2:set-source-rgba r g b current-a)
+	      (cl-cairo2:fill-path))))))))
+
 ;; Okay, how to handle drawing this thing?  lets just focus on the buttons
 ;; I guess...   Where do those get positioned?  It's a tree I guess...
 
 ;; First matrix positions the drawing within the drawing area (full size I suppose
 ;; and maps it from 0 to 1 each way...   Maybe.. I want to preserve a good aspect
 ;; ratio I think...
+
+;; Okay, so then I need to draw a neck, a body, a keytar ... where do these go?
+
+;; ACTUALLY, before doing this, lets get mouse clicking first.  See if I can click
+;; this box.  I have a feeling that I'll want to describe my drawing with code so
+;; I can figure out where I've clicked and also apply colors and junk... there
+;; is some state to this GUI representation.
 
 (defstruct music-engine
   "My thing"
@@ -46,8 +123,61 @@
 
 (labels ((draw-instrument ()
 	   (cl-cairo2:rectangle 0.0 0.0 1.0 1.0)
-	   (cl-cairo2:set-source-rgb 1.0 0.2 0.5)
-	   (cl-cairo2:fill-path)))
+	   (cl-cairo2:set-source-rgb 0.7 0.7 0.8)
+	   (cl-cairo2:fill-path)
+
+	   (let ((m (cl-cairo2:get-trans-matrix)))
+	     (cl-cairo2:set-trans-matrix m)
+	     (cl-cairo2:translate 0d0 0d0)
+	     (cl-cairo2:scale 0.5 0.5)
+	     (cairo-draw-basic-led
+	      (make-gui-basic-led-parameters
+	       :on-color *basic-led-red-on*
+	       :off-color *basic-led-red-off*
+	       :glow-color *basic-led-red-glow*
+	       :stroke-width .02d0
+	       :stroke-color *black*)
+	      (make-gui-basic-led-state
+	       :illuminated t))
+
+	     (cl-cairo2:set-trans-matrix m)
+	     (cl-cairo2:translate 0d0 0.5d0)
+	     (cl-cairo2:scale 0.5 0.5)
+	     (cairo-draw-basic-led
+	      (make-gui-basic-led-parameters
+	       :on-color *basic-led-red-on*
+	       :off-color *basic-led-red-off*
+	       :glow-color *basic-led-red-glow*
+	       :stroke-width .02d0
+	       :stroke-color *black*)
+	      (make-gui-basic-led-state
+	       :illuminated nil))
+
+	     (cl-cairo2:set-trans-matrix m)
+	     (cl-cairo2:translate 0.5d0 0.5d0)
+	     (cl-cairo2:scale 0.5 0.5)
+	     (cairo-draw-basic-led
+	      (make-gui-basic-led-parameters
+	       :on-color *basic-led-green-on*
+	       :off-color *basic-led-green-off*
+	       :glow-color *basic-led-green-glow*
+	       :stroke-width .02d0
+	       :stroke-color *black*)
+	      (make-gui-basic-led-state
+	       :illuminated nil))
+
+	     (cl-cairo2:set-trans-matrix m)
+	     (cl-cairo2:translate 0.5d0 0.0d0)
+	     (cl-cairo2:scale 0.5 0.5)
+	     (cairo-draw-basic-led
+	      (make-gui-basic-led-parameters
+	       :on-color *basic-led-green-on*
+	       :off-color *basic-led-green-off*
+	       :glow-color *basic-led-green-glow*
+	       :stroke-width .02d0
+	       :stroke-color *black*)
+	      (make-gui-basic-led-state
+	       :illuminated t)))))
   (defun draw (cairo width height)
     (let ((cl-cairo2:*context* cairo))
       ;; Background

@@ -1,6 +1,14 @@
 # music-engine
 An attempt to wire up pipewire with common-lisp and sooperlooper.
 
+## Notes on AI
+
+Based on clean input from my voice, and knowledge of my songs, an AI could be trained to determine the lyrics to display.
+
+Similarly, based on intensity and the above, a selection of a visual could be made.
+
+Finally a generic audio visualization could be selected and applied to the visual.
+
 ## Notes on the buttons
 
 Tomorrow, maybe synthesize my notes out of this file and proceed with
