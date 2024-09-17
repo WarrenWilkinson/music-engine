@@ -23,6 +23,13 @@
 (defvar *gio* (gir:require-namespace "Gio")) 
 (defvar *gtk* (gir:require-namespace "Gtk" "4.0")) ;; GTK 4.0
 
+(defvar *no-operation-gui-state-change-callback* #'(lambda ()))
+(defvar *gui-state-change-callback* *no-operation-gui-state-change-callback*
+  "This is replaced when the GUI starts. It's used so that GUI elements
+   automatically trigger a GUI refresh when they change.  This is important
+   because th engine itself should be blind to the GUI's existance or it'll
+   be hard to embed it into real hardware." )
+
 
 ;; Okay, divide the problem... EVERY THING draws in a 1x1 box. Not sure about
 ;; stroke widths... but there you go... wait even this doesn't work exactly...
@@ -55,13 +62,17 @@
   (stroke-width 0.01d0 :type double-float :read-only t)
   (stroke-color *black* :type cairo-color :read-only t)
   (on-click nil :type (or null function symbol) :read-only t)
-  (illuminated nil :type boolean :read-only nil))
+  (%illuminated nil :type boolean :read-only nil))
 
-;; (defstruct label
-;;   "A text label... Maybe needs a background?"
-;;   (text nil :type string :read-only nil)
-;;   (font nil :type string :read-only t)
-;;   (font-size 1.0d0 :type double-float :read-only t))
+(declaim (inline basic-led-illuminated))
+(defun basic-led-illuminated (basic-led)
+  (basic-led-%illuminated basic-led))
+
+(defun (setf basic-led-illuminated) (new-color basic-led)
+  (prog1 (setf (basic-led-%illuminated basic-led) new-color)
+    (funcall *gui-state-change-callback*)))
+
+(defstruct keytar)
 
 (defun red-led (&key on-click)
   (make-basic-led :on-click on-click))
@@ -75,8 +86,7 @@
 
 (defparameter *gui*
   (let ((light #'(lambda (self)
-		 (setf (basic-led-illuminated self) (not (basic-led-illuminated self)))
-		   t)))
+		   (setf (basic-led-illuminated self) (not (basic-led-illuminated self))))))
     (make-grid
      :columns 2
      :elements (list
@@ -99,7 +109,7 @@
       (cl-cairo2:scale 0.5 0.5)
       (draw (second (grid-elements grid)))))
   (:method ((element basic-led))
-    (with-slots (on-color off-color glow-color stroke-width stroke-color illuminated) element
+    (with-slots (on-color off-color glow-color stroke-width stroke-color (illuminated %illuminated)) element
       (cl-cairo2:arc 0.5d0 0.5d0 0.4d0 0.0 (* 2 pi))
       (with-slots (r g b a) (if illuminated on-color off-color)
 	(cl-cairo2:set-source-rgba r g b a))
@@ -123,8 +133,7 @@
 
 (defgeneric click (element x y)
   (:documentation "Click the given element. x and y should be relative to top corner of
-   the elements range and from 0.0 to 1.0.  It should return T if the
-   click resulted in the GUI needing to be redrawn.")
+   the elements range and from 0.0 to 1.0.")
   (:method ((grid grid) x y)
     (assert (= (grid-columns grid) 2))
     (assert (= 2 (length (grid-elements grid))))
@@ -221,14 +230,18 @@
                                     (width :int) (height :int)
 				    (user-data :pointer))
   (declare (ignore user-data gtk-drawing-area))
-  (let ((cairo (make-instance 'cl-cairo2:context
+  (let (;; (gtk-drawing-area (gir:build-object-ptr (gir:nget-desc *gtk* "DrawingArea") gtk-drawing-area))
+	(report-errors t)
+	(cairo (make-instance 'cl-cairo2:context
 			      :pixel-based-p t
 			      :height height
 			      :width width
-			      :pointer cairo))
-	;; (gtk-drawing-area (gir:build-object-ptr (gir:nget-desc *gtk* "DrawingArea") gtk-drawing-area))
-	)
-    (ignore-errors (draw-gui cairo width height))))
+			      :pointer cairo)))
+    (handler-case (prog1 (draw-gui cairo width height)
+		    (setf report-errors t))
+      (error (e)
+	(warn (format nil "~In draw-thing callback, got error: ~a" e))
+	(setf report-errors nil)))))
 
 (cffi:defcallback cleanup-draw-thing :void ((user-data :pointer))
   (declare (ignore user-data))
@@ -254,6 +267,7 @@
 		 (lambda (app)
 		   (declare (ignore app))
 		   (format t "~%Application Shut-down!")
+		   (setf *gui-state-change-callback* *no-operation-gui-state-change-callback*)
 		   (music-engine-shutdown *music-engine*)))
     (gir:connect app "activate"
 		 (lambda (app)
@@ -266,11 +280,11 @@
 		     (gir:connect gesture-click "pressed"
 				  (lambda (self button-number x y)
 				    (declare (ignore self button-number))
-				    (when (click-gui x y *gui-width* *gui-height*)
-				      ;; Trigger redraw when click-gui returns T
-				      (gir:invoke (drawing-area 'queue-draw)))))
+				    (click-gui x y *gui-width* *gui-height*)))
 		     (setf (gir:property gesture-click "button") 1)
 		     (gir:invoke (drawing-area 'add-controller) gesture-click)
+
+		     (setf *gui-state-change-callback* #'(lambda () (gir:invoke (drawing-area 'queue-draw))))
 
 		     ;; Setup the drawing area's callback
 		     (gir:invoke (drawing-area 'set-draw-func)
