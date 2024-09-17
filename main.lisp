@@ -84,14 +84,16 @@
    :glow-color *basic-led-green-glow*
    :on-click on-click))
 
+(defun basic-led-toggle (basic-led)
+  (setf (basic-led-illuminated basic-led) (not (basic-led-illuminated basic-led))))
+
+(defparameter *power-led* (red-led :on-click 'basic-led-toggle))
 (defparameter *gui*
-  (let ((light #'(lambda (self)
-		   (setf (basic-led-illuminated self) (not (basic-led-illuminated self))))))
-    (make-grid
-     :columns 2
-     :elements (list
-		(red-led :on-click light)
-		(green-led :on-click light)))))
+  (make-grid
+   :columns 2
+   :elements (list
+	      *power-led*
+	      (green-led :on-click 'basic-led-toggle))))
 
 (defgeneric draw (element)
   (:documentation "Draw the given element.")
