@@ -30,10 +30,6 @@
 ;; There is definitely "STATE" being passed in... GUI state stuff...
 ;; For example, an LED has state "ON" or "OFF".
 
-(defstruct gui-basic-led-state
-  "This stuff changes at run-time."
-  (illuminated nil :type boolean :read-only nil))
-
 (defstruct cairo-color
   (r 0.0d0 :type double-float :read-only t)
   (g 0.0d0 :type double-float :read-only t)
@@ -48,30 +44,62 @@
 (defparameter *basic-led-green-off* (make-cairo-color :r 0.0d0 :g 0.2d0 :b 0.0d0))
 (defparameter *basic-led-green-glow* (make-cairo-color :r 0.3d0 :g 1.0d0 :b 0.3d0 :a 0.3d0))
 
-(defstruct gui-basic-led-parameters
-  "This stuff changes at design time."
-  (on-color nil :type cairo-color :read-only t)
-  (off-color nil :type cairo-color :read-only t)
-  (glow-color nil :type cairo-color :read-only t)
-  (stroke-width nil :type double-float :read-only t)
-  (stroke-color *black* :type cairo-color :read-only t))
+(defstruct grid
+  (elements nil :type list :read-only t)
+  (columns 1 :type (and fixnum (integer 1)) :read-only t))
 
-(defstruct gui-label-state)
+(defstruct basic-led
+  (on-color *basic-led-red-on* :type cairo-color :read-only t)
+  (off-color *basic-led-red-off* :type cairo-color :read-only t)
+  (glow-color *basic-led-red-glow* :type cairo-color :read-only t)
+  (stroke-width 0.01d0 :type double-float :read-only t)
+  (stroke-color *black* :type cairo-color :read-only t)
+  (on-click nil :type (or null function symbol) :read-only t)
+  (illuminated nil :type boolean :read-only nil))
 
-(defstruct gui-label-parameters
-  "This stuff changes at run-time."
-  (text nil :type string :read-only nil)
-  (font nil :type string :read-only t)
-  (font-size 1.0d0 :type double-float :read-only t))
+;; (defstruct label
+;;   "A text label... Maybe needs a background?"
+;;   (text nil :type string :read-only nil)
+;;   (font nil :type string :read-only t)
+;;   (font-size 1.0d0 :type double-float :read-only t))
 
-;; The recursion metadata is what's tricky... because it might includes things like
-;; what covers what, where the button is...  Do things move?  For example, a wammy
-;; bar might MOVE when clicked... how does that get communicated?   I think
-;; the best approach is it DOESN'T.
+(defun red-led (&key on-click)
+  (make-basic-led :on-click on-click))
 
-(defun cairo-draw-basic-led (parameters state)
-  (with-slots (on-color off-color glow-color stroke-width stroke-color) parameters
-    (with-slots (illuminated) state
+(defun green-led (&key on-click)
+  (make-basic-led
+   :on-color *basic-led-green-on*
+   :off-color *basic-led-green-off*
+   :glow-color *basic-led-green-glow*
+   :on-click on-click))
+
+(defparameter *gui*
+  (let ((light #'(lambda (self)
+		 (setf (basic-led-illuminated self) (not (basic-led-illuminated self)))
+		   t)))
+    (make-grid
+     :columns 2
+     :elements (list
+		(red-led :on-click light)
+		(green-led :on-click light)))))
+
+(defgeneric draw (element)
+  (:documentation "Draw the given element.")
+  (:method ((grid grid))
+    (assert (= (grid-columns grid) 2))
+    (assert (= 2 (length (grid-elements grid))))
+    (let ((m (cl-cairo2:get-trans-matrix)))
+      (cl-cairo2:set-trans-matrix m)
+      (cl-cairo2:translate 0d0 0d0)
+      (cl-cairo2:scale 0.5 0.5)
+      (draw (first (grid-elements grid)))
+
+      (cl-cairo2:set-trans-matrix m)
+      (cl-cairo2:translate 0.5d0 0.0d0)
+      (cl-cairo2:scale 0.5 0.5)
+      (draw (second (grid-elements grid)))))
+  (:method ((element basic-led))
+    (with-slots (on-color off-color glow-color stroke-width stroke-color illuminated) element
       (cl-cairo2:arc 0.5d0 0.5d0 0.4d0 0.0 (* 2 pi))
       (with-slots (r g b a) (if illuminated on-color off-color)
 	(cl-cairo2:set-source-rgba r g b a))
@@ -93,19 +121,78 @@
 	      (cl-cairo2:set-source-rgba r g b current-a)
 	      (cl-cairo2:fill-path))))))))
 
-;; Okay, how to handle drawing this thing?  lets just focus on the buttons
-;; I guess...   Where do those get positioned?  It's a tree I guess...
+(defgeneric click (element x y)
+  (:documentation "Click the given element. x and y should be relative to top corner of
+   the elements range and from 0.0 to 1.0.  It should return T if the
+   click resulted in the GUI needing to be redrawn.")
+  (:method ((grid grid) x y)
+    (assert (= (grid-columns grid) 2))
+    (assert (= 2 (length (grid-elements grid))))
+    (if (< x 0.5d0)
+	(click (first (grid-elements grid)) (/ x 0.5d0) (/ y 0.5d0))
+	(click (second (grid-elements grid)) (/ (- x 0.5d0) 0.5d0) (/ y 0.5d0))))
+  (:method ((element basic-led) x y)
+    (unless (<= .1 x .9)
+      (return-from click nil))
+    (unless (<= .1 y .9)
+      (return-from click nil))
+    (let* ((x (- x 0.5))
+	   (y (- y 0.5))
+	   (d (+ (* x x) (* y y))))
+      (when (< d (* 0.4d0 0.4d0 ))
+	(funcall (basic-led-on-click element) element)))))
 
-;; First matrix positions the drawing within the drawing area (full size I suppose
-;; and maps it from 0 to 1 each way...   Maybe.. I want to preserve a good aspect
-;; ratio I think...
+(defun draw-gui (cairo width height)
+  (let ((cl-cairo2:*context* cairo))
+    ;; Background
+    (cl-cairo2:rectangle 0 0 width height)
+    (cl-cairo2:set-source-rgb 0.2 0.2 0.5)
+    (cl-cairo2:fill-path)
 
-;; Okay, so then I need to draw a neck, a body, a keytar ... where do these go?
+    ;; Position drawing space with fixed aspect ratio in the middle.
+    (let ((smaller-dim (min width height)))
+      ;; Translate to middle
+      (cond ((= width smaller-dim)
+	     (cl-cairo2:translate 0 (truncate (- height smaller-dim) 2)))
+	    (t
+	     (cl-cairo2:translate (truncate (- width smaller-dim) 2) 0)))
 
-;; ACTUALLY, before doing this, lets get mouse clicking first.  See if I can click
-;; this box.  I have a feeling that I'll want to describe my drawing with code so
-;; I can figure out where I've clicked and also apply colors and junk... there
-;; is some state to this GUI representation.
+      ;; Scale so drawing is 0 to 1 in both axis
+      (cl-cairo2:scale smaller-dim smaller-dim)
+      (draw *gui*))))
+
+(defun click-gui (x y width height)
+  "x and y should be in range of (0,0) to (width,hight)"
+  (check-type x double-float)
+  (check-type y double-float)
+  (check-type width fixnum)
+  (check-type height fixnum)
+  ;; (format t "~%click-gui ~a ~a ~a ~a" x y width height)
+  (unless (> width 0)
+    (return-from click-gui nil))
+
+  (unless (> height 0)
+    (return-from click-gui nil))
+
+  (unless (<= 0 x width)
+    (return-from click-gui nil))
+
+  (unless (<= 0 y height)
+    (return-from click-gui nil))
+
+  (let ((smaller-dim (min width height)))
+    ;; Translate the coordinates...
+    (cond ((= width smaller-dim)
+	   ;; Then Y is too big, subtract out the margin.
+	   (decf y (truncate (- height smaller-dim) 2)))
+	  (t
+	   ;; Then X is too big, subtract out the margin.
+	   (decf x (truncate (- width smaller-dim) 2))))
+
+    (setf x (coerce (/ x smaller-dim) 'double-float))
+    (setf y (coerce (/ y smaller-dim) 'double-float))
+    ;; (format t "~% -> click ~a ~a" x y)
+    (click *gui* x y)))
 
 (defstruct music-engine
   "My thing"
@@ -121,97 +208,19 @@
 
 (defvar *music-engine* (make-music-engine))
 
-(labels ((draw-instrument ()
-	   (cl-cairo2:rectangle 0.0 0.0 1.0 1.0)
-	   (cl-cairo2:set-source-rgb 0.7 0.7 0.8)
-	   (cl-cairo2:fill-path)
-
-	   (let ((m (cl-cairo2:get-trans-matrix)))
-	     (cl-cairo2:set-trans-matrix m)
-	     (cl-cairo2:translate 0d0 0d0)
-	     (cl-cairo2:scale 0.5 0.5)
-	     (cairo-draw-basic-led
-	      (make-gui-basic-led-parameters
-	       :on-color *basic-led-red-on*
-	       :off-color *basic-led-red-off*
-	       :glow-color *basic-led-red-glow*
-	       :stroke-width .02d0
-	       :stroke-color *black*)
-	      (make-gui-basic-led-state
-	       :illuminated t))
-
-	     (cl-cairo2:set-trans-matrix m)
-	     (cl-cairo2:translate 0d0 0.5d0)
-	     (cl-cairo2:scale 0.5 0.5)
-	     (cairo-draw-basic-led
-	      (make-gui-basic-led-parameters
-	       :on-color *basic-led-red-on*
-	       :off-color *basic-led-red-off*
-	       :glow-color *basic-led-red-glow*
-	       :stroke-width .02d0
-	       :stroke-color *black*)
-	      (make-gui-basic-led-state
-	       :illuminated nil))
-
-	     (cl-cairo2:set-trans-matrix m)
-	     (cl-cairo2:translate 0.5d0 0.5d0)
-	     (cl-cairo2:scale 0.5 0.5)
-	     (cairo-draw-basic-led
-	      (make-gui-basic-led-parameters
-	       :on-color *basic-led-green-on*
-	       :off-color *basic-led-green-off*
-	       :glow-color *basic-led-green-glow*
-	       :stroke-width .02d0
-	       :stroke-color *black*)
-	      (make-gui-basic-led-state
-	       :illuminated nil))
-
-	     (cl-cairo2:set-trans-matrix m)
-	     (cl-cairo2:translate 0.5d0 0.0d0)
-	     (cl-cairo2:scale 0.5 0.5)
-	     (cairo-draw-basic-led
-	      (make-gui-basic-led-parameters
-	       :on-color *basic-led-green-on*
-	       :off-color *basic-led-green-off*
-	       :glow-color *basic-led-green-glow*
-	       :stroke-width .02d0
-	       :stroke-color *black*)
-	      (make-gui-basic-led-state
-	       :illuminated t)))))
-  (defun draw (cairo width height)
-    (let ((cl-cairo2:*context* cairo))
-      ;; Background
-      (cl-cairo2:rectangle 0 0 width height)
-      (cl-cairo2:set-source-rgb 0.2 0.2 0.5)
-      (cl-cairo2:fill-path)
-
-      ;; Position drawing space with fixed aspect ratio in the middle.
-      (let ((smaller-dim (min width height)))
-	;; Translate to middle
-	(cond ((= width smaller-dim)
-	       (cl-cairo2:translate 0 (truncate (- height smaller-dim) 2)))
-	      (t
-	       (cl-cairo2:translate (truncate (- width smaller-dim) 2) 0)))
-
-	;; Scale so drawing is 0 to 1 in both axis
-	(cl-cairo2:scale smaller-dim smaller-dim)
-
-	;; Now fill in the drawing region
-	(draw-instrument)))))
-
-(defun test-draw ()
+(defun test-draw-gui ()
   (let* ((width 200)
 	 (height 100)
 	 (surface (cl-cairo2:create-pdf-surface "example.pdf" width height)))
     (setf cl-cairo2:*context* (cl-cairo2:create-context surface))
     (cl-cairo2:destroy surface)
-    (draw cl-cairo2:*context* width height)
+    (draw-gui cl-cairo2:*context* width height)
     (cl-cairo2:destroy cl-cairo2:*context*)))
 
 (cffi:defcallback draw-thing :void ((gtk-drawing-area :pointer) (cairo :pointer)
                                     (width :int) (height :int)
 				    (user-data :pointer))
-  (declare (ignore user-data))
+  (declare (ignore user-data gtk-drawing-area))
   (let ((cairo (make-instance 'cl-cairo2:context
 			      :pixel-based-p t
 			      :height height
@@ -219,18 +228,23 @@
 			      :pointer cairo))
 	;; (gtk-drawing-area (gir:build-object-ptr (gir:nget-desc *gtk* "DrawingArea") gtk-drawing-area))
 	)
-    (ignore-errors (draw cairo width height))))
+    (ignore-errors (draw-gui cairo width height))))
 
 (cffi:defcallback cleanup-draw-thing :void ((user-data :pointer))
   (declare (ignore user-data))
   (format t "~%Inside my cleanup-draw-thing callback!"))
 
+(declaim (type fixnum *gui-height* *gui-width*))
+(defparameter *gui-height* 600)
+(defparameter *gui-width* 800)
+
 (defun create-gui ()
   "Starts the GUI, which starts up a music engine and displays it."
   (let ((app (gir:invoke (*gtk* "Application" 'new)
 			 "org.gtk.example"
-			 (gir:nget *gio* "ApplicationFlags" :default-flags))))
-    (format t "~%APP is ~a" app)
+			 (gir:nget *gio* "ApplicationFlags" :default-flags)))
+	(default-width 800)
+	(default-height 600))
     (gir:connect app "startup"
 		 (lambda (app)
 		   (declare (ignore app))
@@ -245,20 +259,42 @@
 		 (lambda (app)
 		   (format t "~%Application Activate... create a window!")
 		   (let ((window (gir:invoke (*gtk* "ApplicationWindow" 'new) app))
+			 (gesture-click (gir:invoke (*gtk* "GestureClick" 'new)))
 			 (drawing-area (gir:invoke (*gtk* "DrawingArea" 'new))))
 
-		     ;; Setup the drawing area...
+		     ;; Add a click handler to the drawing area.
+		     (gir:connect gesture-click "pressed"
+				  (lambda (self button-number x y)
+				    (declare (ignore self button-number))
+				    (when (click-gui x y *gui-width* *gui-height*)
+				      ;; Trigger redraw when click-gui returns T
+				      (gir:invoke (drawing-area 'queue-draw)))))
+		     (setf (gir:property gesture-click "button") 1)
+		     (gir:invoke (drawing-area 'add-controller) gesture-click)
+
+		     ;; Setup the drawing area's callback
 		     (gir:invoke (drawing-area 'set-draw-func)
 				 (cffi:callback draw-thing)
 				 (cffi:null-pointer) ;; user data
 				 (cffi:callback cleanup-draw-thing))
 
-		     (setf (gir:property window "default-height") 600)
+		     ;; Setup a resize handler. We need to know the size
+		     ;; so we can give it to the click handler
+		     (gir:connect drawing-area "resize"
+				  (lambda (self width height)
+				      (declare (ignore self))
+				      (setf *gui-width* width)
+				      (setf *gui-height* height))
+				  :after t)
+
+		     ;; Set some initial properties and values...
+		     (setf (gir:property window "default-width") default-width)
+		     (setf (gir:property window "default-height") default-height)
+		     (setf *gui-width* default-width)
+		     (setf *gui-height* default-height)
 		     (setf (gir:property window "title") "Virtual Warren Controllerist Instrument")
-		     (setf (gir:property window "default-width") 800)
 
 		     (gir:invoke (window 'set-child) drawing-area)
-    
 		     (gir:invoke (window 'show)))))
     (gir:invoke (app 'run) nil)))
 
