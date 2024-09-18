@@ -20,16 +20,13 @@
 
 ;; sudo apt-get install gir1.2-wp-0.4
 (defvar *wp* (gir:require-namespace "Wp" "0.4")) ;; Wire Plumber
-(defvar *gio* (gir:require-namespace "Gio")) 
-(defvar *gtk* (gir:require-namespace "Gtk" "4.0")) ;; GTK 4.0
 
-(defvar *no-operation-gui-state-change-callback* #'(lambda ()))
-(defvar *gui-state-change-callback* *no-operation-gui-state-change-callback*
-  "This is replaced when the GUI starts. It's used so that GUI elements
-   automatically trigger a GUI refresh when they change.  This is important
-   because th engine itself should be blind to the GUI's existance or it'll
-   be hard to embed it into real hardware." )
+(defvar *gui-redraw-callback* nil
+  "Set to true when the GUI needs to be redrawn." )
 
+(defun queue-redraw ()
+  (when *gui-redraw-callback*
+    (funcall *gui-redraw-callback*)))
 
 ;; Okay, divide the problem... EVERY THING draws in a 1x1 box. Not sure about
 ;; stroke widths... but there you go... wait even this doesn't work exactly...
@@ -44,6 +41,7 @@
   (a 1.0d0 :type double-float :read-only t))
 
 (defparameter *black* (make-cairo-color :r 0.0d0 :g 0.0d0 :b 0.0d0))
+(defparameter *white* (make-cairo-color :r 1.0d0 :g 1.0d0 :b 1.0d0))
 (defparameter *basic-led-red-on*  (make-cairo-color :r 0.6d0 :g 0.0d0 :b 0.0d0))
 (defparameter *basic-led-red-off* (make-cairo-color :r 0.2d0 :g 0.0d0 :b 0.0d0))
 (defparameter *basic-led-red-glow* (make-cairo-color :r 1.0d0 :g 0.1d0 :b 0.3d0 :a 0.3d0))
@@ -51,11 +49,24 @@
 (defparameter *basic-led-green-off* (make-cairo-color :r 0.0d0 :g 0.2d0 :b 0.0d0))
 (defparameter *basic-led-green-glow* (make-cairo-color :r 0.3d0 :g 1.0d0 :b 0.3d0 :a 0.3d0))
 
-(defstruct grid
+(defstruct widget
+  "Position of the GUI element. Note for development: they can be changed
+   with slot-value and you can setf *gui-redraw-callback*.
+   Rotation is in degrees, and a widget can assume that it's initial
+   scale has x going from 0 to 1, and y from 0 to y/x (and is in terms
+   of an offset in it's parents space). Ergo a translation of 0.1 is
+   pretty big."
+  (translate-x 0d0 :type (double-float 0d0 1d0) :read-only t)
+  (translate-y 0d0 :type (double-float 0d0 1d0) :read-only t)
+  (rotation 0d0 :type (double-float 0d0 360d0) :read-only t)
+  (rotation-origin :top-left :type (member :top-left) :read-only t)
+  (scale 1d0 :type double-float :read-only t))
+
+(defstruct (grid (:include widget))
   (elements nil :type list :read-only t)
   (columns 1 :type (and fixnum (integer 1)) :read-only t))
 
-(defstruct basic-led
+(defstruct (basic-led (:include widget))
   (on-color *basic-led-red-on* :type cairo-color :read-only t)
   (off-color *basic-led-red-off* :type cairo-color :read-only t)
   (glow-color *basic-led-red-glow* :type cairo-color :read-only t)
@@ -70,9 +81,98 @@
 
 (defun (setf basic-led-illuminated) (new-color basic-led)
   (prog1 (setf (basic-led-%illuminated basic-led) new-color)
-    (funcall *gui-state-change-callback*)))
+    (queue-redraw)))
 
-(defstruct keytar)
+(defstruct (keytar (:include widget))
+  (fill-color (make-cairo-color :r 0.3d0 :g 0.3d0 :b 0.4d0) :type cairo-color :read-only t)
+  (stroke-width 0.1d0 :type double-float :read-only t)
+  (stroke-color *black* :type cairo-color :read-only t)
+  (white-key-color *white* :type cairo-color :read-only t)
+  (white-key-stroke-color (make-cairo-color :r .6d0 :g .6d0 :b .6d0) :type cairo-color :read-only t)
+  (white-key-pressed-color (make-cairo-color :r .9d0 :g .8d0 :b .8d0) :type cairo-color :read-only t)
+  (black-key-color (make-cairo-color :r .05d0 :g .05d0 :b .05d0) :type cairo-color :read-only t)
+  (black-key-pressed-color (make-cairo-color :r .3d0 :g .2d0 :b .2d0) :type cairo-color :read-only t)
+  (black-key-stroke-color *black* :type cairo-color :read-only t)
+  (orange-group-color (make-cairo-color :r 1.0d0 :g 0.5d0 :b 0.0d0) :type cairo-color :read-only t)
+  (green-group-color (make-cairo-color :r 0.0d0 :g 0.9d0 :b 0.0d0) :type cairo-color :read-only t)
+  (blue-group-color (make-cairo-color :r 0.35d0 :g 0.7d0 :b 0.9d0) :type cairo-color :read-only t)
+  (yellow-group-color (make-cairo-color :r 0.9d0 :g 0.9d0 :b 0.5d0) :type cairo-color :read-only t)
+  (red-group-color (make-cairo-color :r 6.0d0 :g 0.2d0 :b 0.2d0) :type cairo-color :read-only t)
+  (modulation-control-color (make-cairo-color :r 0.2d0 :g 0.1d0 :b 0.1d0) :type cairo-color :read-only t)
+  (modulation-control-stroke-color *black* :type cairo-color :read-only t)
+  (overdrive-button-color (make-cairo-color :r 0.22d0 :g 0.1d0 :b 0.1d0) :type cairo-color :read-only t)
+  (overdrive-button-pressed-color (make-cairo-color :r 0.1d0 :g 0.1d0 :b 0.1d0) :type cairo-color :read-only t)
+  (led-on-color (make-cairo-color :r 1.0d0 :g 0.2d0 :b 0.2d0) :type cairo-color :read-only t)
+  (led-off-color (make-cairo-color :r 0.5d0 :g 0.5d0 :b 0.5d0) :type cairo-color :read-only t)
+  (overdrive-button-stroke-color *black* :type cairo-color :read-only t)
+  (dpad-stroke-color *black* :type cairo-color :read-only t)
+  (dpad-base-color (make-cairo-color :r 0.19d0 :g 0.19d0 :b 0.19d0) :type cairo-color :read-only t)
+  (dpad-highlight-color (make-cairo-color :r 0.4d0 :g 0.4d0 :b 0.4d0) :type cairo-color :read-only t)
+  (button-base-color (make-cairo-color :r 0.22d0 :g 0.22d0 :b 0.24d0) :type cairo-color :read-only t)
+  (button-pressed-color (make-cairo-color :r 0.15d0 :g 0.0d0 :b 0.0d0) :type cairo-color :read-only t)
+  (button-stroke-color *black* :type cairo-color :read-only t)
+  (green-triangle-color (make-cairo-color :r 0.2d0 :g 0.5d0 :b 0.2d0) :type cairo-color :read-only t)
+  (green-triangle-pressed-color (make-cairo-color :r 0.1d0 :g 0.3d0 :b 0.0d0) :type cairo-color :read-only t)
+  (red-circle-color (make-cairo-color :r 0.6d0 :g 0.3d0 :b 0.3d0) :type cairo-color :read-only t)
+  (red-circle-pressed-color (make-cairo-color :r 0.3d0 :g 0.0d0 :b 0.0d0) :type cairo-color :read-only t)
+  (pink-square-color (make-cairo-color :r 1.0d0 :g 0.8d0 :b 0.8d0) :type cairo-color :read-only t)
+  (pink-square-pressed-color (make-cairo-color :r 0.4d0 :g 0.3d0 :b 0.3d0) :type cairo-color :read-only t)
+  (white-cross-color (make-cairo-color :r 0.8d0 :g 0.8d0 :b 0.8d0) :type cairo-color :read-only t)
+  (white-cross-pressed-color (make-cairo-color :r 0.35d0 :g 0.3d0 :b 0.3d0) :type cairo-color :read-only t)
+  (%dpad-position nil :type (or null (member :up :down :left :right)) :read-only nil)
+  (%depressed (make-array 25 :element-type 'bit :initial-element 0)
+   :type bit-vector :read-only t)
+  (%buttons (make-array 4 :element-type 'bit :initial-element 0) :type bit-vector :read-only t)
+  (%led (make-array 4 :element-type 'bit :initial-element 0)))
+
+(defun keytar-dpad-position (keytar)
+  (keytar-%dpad-position keytar))
+
+(defun (setf keytar-dpad-position) (np keytar)
+  (check-type np (or null (member :up :down :left :right)))
+  (unless (eq np (keytar-%dpad-position keytar))
+    (setf (keytar-%dpad-position keytar) np)
+    (queue-redraw))
+  np)
+
+(defun keytar-button-pressed (keytar index)
+  (check-type index (integer 0 3))
+  (= 1 (aref (keytar-%buttons keytar) index)))
+
+(defun (setf keytar-button-pressed) (value keytar index)
+  (check-type index (integer 0 3))
+  (check-type value boolean)
+  (let ((value (if value 1 0)))
+    (unless (= value (aref (keytar-%buttons keytar) index))
+      (setf (aref (keytar-%buttons keytar) index) value)
+      (queue-redraw)))
+  value)
+
+(defun keytar-key (keytar key-number)
+  (check-type key-number (integer 0 24))
+  (= 1 (aref (keytar-%depressed keytar) key-number)))
+
+(defun (setf keytar-key) (value keytar key-number)
+  (check-type value boolean)
+  (check-type key-number (integer 0 24))
+  (let ((value (if value 1 0)))
+    (unless (= value (aref (keytar-%depressed keytar) key-number))
+      (setf (aref (keytar-%depressed keytar) key-number) value)
+      (queue-redraw)))
+  value)
+
+(defun keytar-led (keytar led-number)
+  (check-type led-number (integer 0 3))
+  (= 1 (aref (keytar-%led keytar) led-number)))
+
+(defun (setf keytar-led) (value keytar led-number)
+  (check-type value boolean)
+  (check-type led-number (integer 0 3))
+  (let ((value (if value 1 0)))
+    (unless (= value (aref (keytar-%led keytar) led-number))
+      (setf (aref (keytar-%led keytar) led-number) value)
+      (queue-redraw)))
+  value)
 
 (defun red-led (&key on-click)
   (make-basic-led :on-click on-click))
@@ -87,16 +187,327 @@
 (defun basic-led-toggle (basic-led)
   (setf (basic-led-illuminated basic-led) (not (basic-led-illuminated basic-led))))
 
-(defparameter *power-led* (red-led :on-click 'basic-led-toggle))
-(defparameter *gui*
-  (make-grid
-   :columns 2
-   :elements (list
-	      *power-led*
-	      (green-led :on-click 'basic-led-toggle))))
+;; (defparameter *power-led* (red-led :on-click 'basic-led-toggle))
+(defparameter *keytar* (make-keytar))
+;;			:fake-power-led *power-led*))
+;;			:on-click 'basic-led-toggle))
+(defparameter *gui* *keytar*)
 
-(defgeneric draw (element)
-  (:documentation "Draw the given element.")
+;; 					;(dotimes (x 100)
+;; (progn
+;;   (setf (slot-value *keytar* 'scale) 1d0)
+;;   (format t "~%KEYTAR SCALE IS NOW ~a" (slot-value *keytar* 'scale))
+;;   (funcall *gui-state-change-callback*))
+  ;; (make-grid
+  ;;  :columns 2
+  ;;  :elements (list
+  ;; 	      *power-led*
+  ;; 	      (green-led :on-click 'basic-led-toggle))))
+
+;; Okay, so I'm thinking for elements
+;; I should have ROT, ORIGIN, OFFSET, SCALE
+;; right inside the element.
+;;
+;; Then draw should be given width and height of the drawing area (in what units?)
+;; Part of my thinking is that for some elements 0 to 1 is not best... and some
+;; have aspect ratios.. something like (25 wide,10 high) is better...
+;;
+;; SO, controlling the scaling is something the element should be doing ITSELF.
+;; And being able to specify the rotation, translation and scaling on the GUI element
+;; itself will make things simpler for me... well maybe... I can't change things
+;; dynamically (e.g. with a C-c) without restarting... can I fix that?
+;; Having the tree be "lazy" would fix it... but would be irritating because all
+;; state would get dropped...  unless I split out state again.
+;;
+;; Okay, so one approach would be to name these elements and have a separate
+;; list of coordinates... Another is just to C-c the SETFs... that works.
+;;
+;; Okay, so even if I have this... what exactly does scale mean?  That one works...
+;; because it works regardless of current units... and rotation also works...
+;; the only one I'm less sure of is translate.   If that one was ALWAYS in terms
+;; of 0 to 1, then it works....
+
+;; Okay, so for me
+
+(defmethod draw :before (widget)
+  "Apply the widget properties of scale, rotation, etc.
+   At the start of a widget call one can expect that X goes from 0 to 1 and Y from 0 to y/x. The offset is
+   applied to this."
+
+  (with-slots (translate-x translate-y rotation scale) widget
+    (assert (zerop rotation))
+    (cl-cairo2:translate translate-x translate-y)
+
+    ;; If scale is .5 we want it to be smaller... 
+    (cl-cairo2:scale (/ scale) (/ scale))))
+
+(defgeneric draw (widget)
+  (:documentation "Draw the given widget")
+  (:method ((k keytar))
+    ;; 24 units wide
+    ;; 8 units high.
+    ;; 0,0 is the top left of the first piano key.
+    (with-slots (fill-color stroke-width stroke-color
+		 white-key-color white-key-stroke-color white-key-pressed-color
+		 black-key-color black-key-stroke-color black-key-pressed-color
+		 orange-group-color green-group-color blue-group-color
+		 yellow-group-color red-group-color
+		 modulation-control-color modulation-control-stroke-color
+		 overdrive-button-color overdrive-button-pressed-color overdrive-button-stroke-color
+		 led-on-color led-off-color
+		 dpad-stroke-color dpad-base-color dpad-highlight-color
+		 button-base-color button-stroke-color button-pressed-color
+		 green-triangle-color green-triangle-pressed-color
+		 red-circle-color red-circle-pressed-color
+		 pink-square-color pink-square-pressed-color
+		 white-cross-color white-cross-pressed-color
+		 ) k
+      (cl-cairo2:scale (/ 24d0) (/ 24d0))
+      (cl-cairo2:translate 1.1d0 .3d0)
+
+      ;; Draw and outline the body
+      (cl-cairo2:move-to -1d0 0d0)
+      (cl-cairo2:line-to 16d0 0d0)
+      (cl-cairo2:line-to 22.5d0 2d0)
+      (cl-cairo2:line-to 22.0d0 3.5d0)
+      (cl-cairo2:line-to 18.5d0 2.8d0)
+      (cl-cairo2:line-to 15.5d0 6.5d0)
+      (cl-cairo2:line-to  0.0d0 7.9d0)
+      (cl-cairo2:line-to -1.0d0 7.0d0)
+      (cl-cairo2:line-to -1.0d0 0.0d0)
+      (cl-cairo2:set-line-width stroke-width)
+
+      (with-slots (r g b a) fill-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-preserve)
+
+      (with-slots (r g b a) stroke-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:stroke)
+
+      ;; Draw the white keys
+      (loop :for x :from 0d0 :by 1d0 :below 15d0
+	    :for key-number :in '(24 23 21 19 17 16 14 12 11 9 7 5 4 2 0)
+	    :for depressed = (keytar-key k key-number)
+	    :for fill-color = (if depressed
+				  white-key-pressed-color
+				  white-key-color)
+	    :do (progn
+		  (cl-cairo2:move-to x 0d0)
+		  (cl-cairo2:rectangle x 0d0 1d0 5.5d0)
+		  (cl-cairo2:set-line-width stroke-width)
+		  (with-slots (r g b a) fill-color
+		    (cl-cairo2:set-source-rgba r g b a))
+		  (cl-cairo2:fill-preserve)
+		  (with-slots (r g b a) white-key-stroke-color
+		    (cl-cairo2:set-source-rgba r g b a))
+		  (cl-cairo2:stroke)))
+
+      ;; Draw the black keys
+      (loop :for x :from .8d0 :by 1d0 :below 15d0
+	    :for key-number :in '(nil 22 20 18 nil 15 13 nil 10 8 6 nil 3 1)
+	    :for depressed = (and key-number (keytar-key k key-number))
+	    :for fill-color = (if depressed
+				  black-key-pressed-color
+				  black-key-color)
+	    :when key-number
+	      :do (progn
+		    (cl-cairo2:move-to x 2d0)
+		    (cl-cairo2:rectangle x 2d0 .4d0 3.5d0)
+		    (cl-cairo2:set-line-width stroke-width)
+		    (with-slots (r g b a) fill-color
+		      (cl-cairo2:set-source-rgba r g b a))
+		    (cl-cairo2:fill-preserve)
+		    (with-slots (r g b a) black-key-stroke-color
+		      (cl-cairo2:set-source-rgba r g b a))
+		    (cl-cairo2:stroke)))
+
+      ;; Draw the colored bands...
+      (cl-cairo2:move-to 0d0 5.5d0)
+      (cl-cairo2:rectangle 0d0 5.5d0 1d0 .1d0)
+      (with-slots (r g b a) orange-group-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-path)
+      (cl-cairo2:move-to 1d0 5.5d0)
+      (cl-cairo2:rectangle 1d0 5.5d0 4d0 .1d0)
+      (with-slots (r g b a) green-group-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-path)
+      (cl-cairo2:move-to 5d0 5.5d0)
+      (cl-cairo2:rectangle 5d0 5.5d0 3d0 .1d0)
+      (with-slots (r g b a) blue-group-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-path)
+      (cl-cairo2:move-to 8d0 5.5d0)
+      (cl-cairo2:rectangle 8d0 5.5d0 4d0 .1d0)
+      (with-slots (r g b a) yellow-group-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-path)
+      (cl-cairo2:move-to 12d0 5.5d0)
+      (cl-cairo2:rectangle 12d0 5.5d0 3d0 .1d0)
+      (with-slots (r g b a) red-group-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-path)
+
+      ;; Modulation control
+      ;; Draw and outline the controller
+      (cl-cairo2:move-to 20.75d0 2d0)
+      (cl-cairo2:line-to 22.1d0 2.4d0)
+      (cl-cairo2:line-to 21.87d0 3.1d0)
+      (cl-cairo2:line-to 20.45d0 2.7d0)
+      (cl-cairo2:close-path)
+
+      (cl-cairo2:set-line-width stroke-width)
+      (with-slots (r g b a) modulation-control-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-preserve)
+      (with-slots (r g b a) modulation-control-stroke-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:stroke)
+
+      ;; Overdrive Button
+      ;; Draw and outline the button
+      (cl-cairo2:move-to 20.4d0 1.9d0)
+      (cl-cairo2:line-to 20.1d0 2.6d0)
+      (cl-cairo2:line-to 19.2d0 2.3d0)
+      (cl-cairo2:line-to 19.3d0 2.0d0)
+      (cl-cairo2:close-path)
+
+      (cl-cairo2:set-line-width stroke-width)
+      (with-slots (r g b a) overdrive-button-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:fill-preserve)
+      (with-slots (r g b a) overdrive-button-stroke-color
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:stroke)
+
+      ;; Draw the 4 leds...
+      (loop :with y = 6.1d0
+	    :for i :from 0 :below 4
+	    :for x :from 2.8d0 :by .15d0
+	    :for color = (if (keytar-led k i)
+			     led-on-color
+			     led-off-color)
+	    :do (progn
+	          ;;(cl-cairo2:move-to 3d0 1.9d0)
+		  (cl-cairo2:arc x y 0.05d0 0.0 (* 2 pi))
+		  (with-slots (r g b a) color
+		    (cl-cairo2:set-source-rgba r g b a))
+		  (cl-cairo2:fill-path)))
+
+      ;; Draw the dpad
+      (let ((x 4.95d0)
+	    (y 6.5d0))
+	(cl-cairo2:arc x y 0.6d0 0.0 (* 2 pi))
+	(with-slots (r g b a) dpad-base-color
+	  (cl-cairo2:set-source-rgba r g b a))
+	(cl-cairo2:fill-preserve)
+	(with-slots (r g b a) dpad-stroke-color
+	  (cl-cairo2:set-source-rgba r g b a))
+	(cl-cairo2:stroke)
+
+	;; Draw the arc lines... We're going to do dark ones on left, lighter ones
+	;; on right.  But they're positions shift depending on dpad position.
+	;; Cairo can't do a perspective warp, so I gotta do it by hand probably by
+	;; just shifting.
+	(case (keytar-dpad-position k)
+	  (:up (decf y .1d0))
+	  (:down (incf y .1d0))
+	  (:left (decf x .1d0))
+	  (:right (incf x .1d0)))
+
+	(let ((r .5d0)
+	      (shift-x .1d0)
+	      (shift-y .1d0))
+
+	  ;; top left
+	  (cl-cairo2:arc (- (- x shift-x) r)
+			 (- (- y shift-y) r)
+			 r (* 1/10 pi) (* 4/10 pi))
+	  (with-slots (r g b a) dpad-stroke-color
+	    (cl-cairo2:set-source-rgba r g b a))
+	  (cl-cairo2:stroke)
+
+	  ;; top right
+	  (cl-cairo2:arc (+ (+ x shift-x) r)
+			 (- (- y shift-y) r)
+			 r (* 6/10 pi) (* 9/10 pi))
+	  (with-slots (r g b a) dpad-highlight-color
+	    (cl-cairo2:set-source-rgba r g b a))
+	  (cl-cairo2:stroke)
+
+	  ;; bottom right
+	  (cl-cairo2:arc (+ (+ x shift-x) r)
+			 (+ (+ y shift-y) r)
+			 r (* 11/10 pi) (* 14/10 pi))
+	  (with-slots (r g b a) dpad-highlight-color
+	    (cl-cairo2:set-source-rgba r g b a))
+	  (cl-cairo2:stroke)
+
+          ;; bottom left
+	  (cl-cairo2:arc (- (- x shift-x) r)
+			 (+ (+ y shift-y) r)
+			 r (* 16/10 pi) (* 19/10 pi))
+	  (with-slots (r g b a) dpad-stroke-color
+	    (cl-cairo2:set-source-rgba r g b a))
+	  (cl-cairo2:stroke)))
+
+      ;; Draw the triangle, circle, cross and square buttons
+      (flet ((button (x y i)
+	       (cl-cairo2:arc x y 0.2d0 0.0 (* 2 pi))
+	       (with-slots (r g b a) (if (keytar-button-pressed k i)
+					 button-pressed-color
+					 button-base-color)
+		 (cl-cairo2:set-source-rgba r g b a))
+	       (cl-cairo2:fill-preserve)
+	       (with-slots (r g b a) button-stroke-color
+		 (cl-cairo2:set-source-rgba r g b a))
+	       (cl-cairo2:stroke)))
+	(button 0.98d0 6.1d0 3) ;; 4. White Cross
+	(button 0.4d0 6.6d0 2)  ;; 3. Red Circle
+	(button 1.5d0 6.6d0 0)  ;; 1. Pink Square
+	(button 0.98d0 7.1d0 1)) ;; 2. Green Triangle
+
+      (cl-cairo2:set-line-width (/ stroke-width 2))
+
+      ;; 1. Pink Square
+      (with-slots (r g b a) (if (keytar-button-pressed k 0)
+				pink-square-pressed-color
+				pink-square-color)
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:rectangle 1.4d0 6.5d0 .2d0 .2d0)
+      (cl-cairo2:stroke)
+
+      ;; 2. Green Triagle
+      (with-slots (r g b a) (if (keytar-button-pressed k 1)
+				green-triangle-pressed-color
+				green-triangle-color)
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:move-to 0.98d0 7.18d0)
+      (cl-cairo2:line-to 1.08d0 7.00d0)
+      (cl-cairo2:line-to 0.88d0 7.00d0)
+      (cl-cairo2:close-path)
+      (cl-cairo2:stroke)
+      
+      ;; 3. Red Circle
+      (with-slots (r g b a) (if (keytar-button-pressed k 2)
+				red-circle-pressed-color
+				red-circle-color)
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:arc 0.4d0 6.6d0 0.12d0 0.0d0 (* 2 pi))
+      (cl-cairo2:stroke)
+
+      ;; 4. White Cross
+      (with-slots (r g b a) (if (keytar-button-pressed k 3)
+				white-cross-pressed-color
+				white-cross-color)
+	(cl-cairo2:set-source-rgba r g b a))
+      (cl-cairo2:move-to 1.08d0 6.0d0)
+      (cl-cairo2:line-to 0.88d0 6.2d0)
+      (cl-cairo2:stroke)
+      (cl-cairo2:move-to 0.88d0 6.0d0)
+      (cl-cairo2:line-to 1.08d0 6.2d0)
+      (cl-cairo2:stroke)))
   (:method ((grid grid))
     (assert (= (grid-columns grid) 2))
     (assert (= 2 (length (grid-elements grid))))
@@ -136,6 +547,64 @@
 (defgeneric click (element x y)
   (:documentation "Click the given element. x and y should be relative to top corner of
    the elements range and from 0.0 to 1.0.")
+  (:method ((k keytar) x y)
+    ;; What's clickable?  The white and black keys, the  sensor, overdrive button, dpad, etc.
+
+    ;; At the start, x goes from 0 to 1 and y from 0 to y/x.
+    ;; Scale them up, and translate them.
+    (let ((mx (- (* x 24d0) 1.1d0))
+	  (my (- (* y 24d0) 0.3d0)))
+
+      ;; Black key presses
+      (loop :for x :from .8d0 :by 1d0 :below 15d0
+	    :for key-number :in '(nil 22 20 18 nil 15 13 nil 10 8 6 nil 3 1)
+	    :when (and key-number
+		       (<= x mx (+ x .4d0))
+		       (<= 2d0 my (+ 2d0 3.5d0)))
+	      :do (setf (keytar-key k key-number) (not (keytar-key k key-number)))
+	      :and :do (return-from click))
+
+      ;; White key presses
+      (loop :for x :from 0d0 :by 1d0 :below 15d0
+	    :for key-number :in '(24 23 21 19 17 16 14 12 11 9 7 5 4 2 0)
+	    :when (and (<= x mx (+ x 1d0))
+		       (<= 0d0 my 5.5d0))
+	      :do (setf (keytar-key k key-number) (not (keytar-key k key-number)))
+	      :and :do (return-from click))
+
+      ;; Dpad directions
+      (let ((x 4.95d0)
+	    (y 6.5d0)
+	    (r .6d0))
+	(let ((clicked-position
+		(cond ((and (<= (- x r) mx (- x (/ r 6d0)))
+			    (<= (- y (/ r 2d0)) my (+ y (/ r 2d0))))
+		       :left)
+		      ((and (<= (+ x (/ r 6d0)) mx (+ x r))
+			    (<= (- y (/ r 2d0)) my (+ y (/ r 2d0))))
+		       :right)
+		      ((and (<= (- y r) my (- y (/ r 6d0)))
+			    (<= (- x (/ r 2d0)) mx (+ x (/ r 2d0))))
+		       :up)
+		      ((and (<= (+ y (/ r 6d0)) my (+ y r))
+			    (<= (- x (/ r 2d0)) mx (+ x (/ r 2d0))))
+		       :down))))
+	  (when clicked-position
+	    (setf (keytar-dpad-position k) (if (eq (keytar-dpad-position k) clicked-position) nil clicked-position))
+	    (setf (keytar-led k (random 4)) (zerop (random 2)))
+	    (return-from click))))
+
+      (flet ((button (x y i)
+	       (when (< (sqrt (+ (expt (- x mx) 2)
+				 (expt (- y my) 2))) 0.2d0)
+		 (setf (keytar-button-pressed k i)
+		       (not (keytar-button-pressed k i)))
+		 (return-from click))))
+	(button 0.98d0 6.1d0 3) ;; 4. Green Triangle
+	(button 0.4d0 6.6d0 2)  ;; 3. Red Circle
+	(button 1.5d0 6.6d0 0)  ;; 1. Pink Square
+	(button 0.98d0 7.1d0 1) ;; 2. White Cross
+      )))
   (:method ((grid grid) x y)
     (assert (= (grid-columns grid) 2))
     (assert (= 2 (length (grid-elements grid))))
@@ -154,23 +623,17 @@
 	(funcall (basic-led-on-click element) element)))))
 
 (defun draw-gui (cairo width height)
+  "Clears the background color and sets up a basic coordinate of (0,0)
+   to (1,y/x) for the full drawable area."
   (let ((cl-cairo2:*context* cairo))
     ;; Background
     (cl-cairo2:rectangle 0 0 width height)
     (cl-cairo2:set-source-rgb 0.2 0.2 0.5)
     (cl-cairo2:fill-path)
 
-    ;; Position drawing space with fixed aspect ratio in the middle.
-    (let ((smaller-dim (min width height)))
-      ;; Translate to middle
-      (cond ((= width smaller-dim)
-	     (cl-cairo2:translate 0 (truncate (- height smaller-dim) 2)))
-	    (t
-	     (cl-cairo2:translate (truncate (- width smaller-dim) 2) 0)))
-
-      ;; Scale so drawing is 0 to 1 in both axis
-      (cl-cairo2:scale smaller-dim smaller-dim)
-      (draw *gui*))))
+    ;; Scale so drawing is 0 to 1 in the X axis and 0 to y/x in the Y axis.
+    (cl-cairo2:scale width width)
+    (draw *gui*)))
 
 (defun click-gui (x y width height)
   "x and y should be in range of (0,0) to (width,hight)"
@@ -191,19 +654,10 @@
   (unless (<= 0 y height)
     (return-from click-gui nil))
 
-  (let ((smaller-dim (min width height)))
-    ;; Translate the coordinates...
-    (cond ((= width smaller-dim)
-	   ;; Then Y is too big, subtract out the margin.
-	   (decf y (truncate (- height smaller-dim) 2)))
-	  (t
-	   ;; Then X is too big, subtract out the margin.
-	   (decf x (truncate (- width smaller-dim) 2))))
-
-    (setf x (coerce (/ x smaller-dim) 'double-float))
-    (setf y (coerce (/ y smaller-dim) 'double-float))
-    ;; (format t "~% -> click ~a ~a" x y)
-    (click *gui* x y)))
+  (setf x (coerce (/ x width) 'double-float))
+  (setf y (coerce (/ y width) 'double-float))
+  ;; (format t "~% -> click ~a ~a" x y)
+  (click *gui* x y))
 
 (defstruct music-engine
   "My thing"
@@ -233,26 +687,36 @@
 				    (user-data :pointer))
   (declare (ignore user-data gtk-drawing-area))
   (let (;; (gtk-drawing-area (gir:build-object-ptr (gir:nget-desc *gtk* "DrawingArea") gtk-drawing-area))
-	(report-errors t)
+	(report-error t)
 	(cairo (make-instance 'cl-cairo2:context
 			      :pixel-based-p t
 			      :height height
 			      :width width
 			      :pointer cairo)))
     (handler-case (prog1 (draw-gui cairo width height)
-		    (setf report-errors t))
+		    (setf report-error t))
       (error (e)
-	(warn (format nil "~In draw-thing callback, got error: ~a" e))
-	(setf report-errors nil)))))
+	(when report-error
+	  (warn (format nil "~In draw-thing callback, got error: ~a" e)))
+	(setf report-error nil))))
+  0)
 
 (cffi:defcallback cleanup-draw-thing :void ((user-data :pointer))
   (declare (ignore user-data))
-  (format t "~%Inside my cleanup-draw-thing callback!"))
+  (format t "~%Inside my cleanup-draw-thing callback!")
+  0)
 
 (declaim (type fixnum *gui-height* *gui-width*))
 (defparameter *gui-height* 600)
 (defparameter *gui-width* 800)
 
+;; Why is this so unstable?  Even recompiling in Lisp causes it to crash.
+;; that has NOTHING to do with the drawing code.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defvar *gio* (gir:require-namespace "Gio"))
+(defvar *gtk* (gir:require-namespace "Gtk" "4.0")) ;; GTK 4.0
 (defun create-gui ()
   "Starts the GUI, which starts up a music engine and displays it."
   (let ((app (gir:invoke (*gtk* "Application" 'new)
@@ -269,8 +733,9 @@
 		 (lambda (app)
 		   (declare (ignore app))
 		   (format t "~%Application Shut-down!")
-		   (setf *gui-state-change-callback* *no-operation-gui-state-change-callback*)
-		   (music-engine-shutdown *music-engine*)))
+		   (setf *gui-redraw-callback* nil)
+		   (music-engine-shutdown *music-engine*)
+		   (format t "~%Shutdown complete!")))
     (gir:connect app "activate"
 		 (lambda (app)
 		   (format t "~%Application Activate... create a window!")
@@ -282,11 +747,18 @@
 		     (gir:connect gesture-click "pressed"
 				  (lambda (self button-number x y)
 				    (declare (ignore self button-number))
-				    (click-gui x y *gui-width* *gui-height*)))
+				    (let ((report-error t))
+				      (handler-case (prog1 (click-gui x y *gui-width* *gui-height*)
+						      (setf report-error t))
+					(error (e)
+					  (when report-error
+					    (warn (format nil "In click handler got error ~a" e)))
+					  (setf report-error nil))))))
 		     (setf (gir:property gesture-click "button") 1)
 		     (gir:invoke (drawing-area 'add-controller) gesture-click)
 
-		     (setf *gui-state-change-callback* #'(lambda () (gir:invoke (drawing-area 'queue-draw))))
+		     (setf *gui-redraw-callback* #'(lambda ()
+						     (gir:invoke (drawing-area 'queue-draw))))
 
 		     ;; Setup the drawing area's callback
 		     (gir:invoke (drawing-area 'set-draw-func)
@@ -298,9 +770,9 @@
 		     ;; so we can give it to the click handler
 		     (gir:connect drawing-area "resize"
 				  (lambda (self width height)
-				      (declare (ignore self))
-				      (setf *gui-width* width)
-				      (setf *gui-height* height))
+				    (declare (ignore self))
+				    (setf *gui-width* width)
+				    (setf *gui-height* height))
 				  :after t)
 
 		     ;; Set some initial properties and values...
@@ -315,4 +787,7 @@
     (gir:invoke (app 'run) nil)))
 
 (defun start-gui ()
-  (sb-thread:make-thread #'create-gui :name "GUI"))
+  (format t "~%Starting the GUI. The way GTK works though, once~%this window is quit you can't restart it without quitting lisp.~%By this I mean, calling run on a previously quit window is undefined behavior.")
+  (sb-thread:make-thread #'create-gui :name "gui thread"))
+
+(sb-posix:setenv "GDK_SYNCHRONIZE" "1" 1)
