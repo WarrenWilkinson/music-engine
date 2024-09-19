@@ -1,0 +1,3 @@
+[submodule "modules/cl-alsa-midi"]
+	path = modules/cl-alsa-midi
+	url = git@github.com:defaultxr/cl-alsa-midi.git

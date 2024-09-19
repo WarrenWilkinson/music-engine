@@ -13,10 +13,16 @@
    :inherit-configuration))
 ;; (asdf:load-system "music-engine")
 
-(format t "~%Starting up...")
+(asdf:load-system :cl-alsa-midi)
 
-;; This is a good start:
-;; I've got GTK going for drawing and a connection to wireplumber.
+
+(format t "~%Starting up MIDI interface...")
+;; Start up the MIDI interface; run `aconnect -lio` to see it.
+(cl-alsa-midi/midihelper:midihelper-start)
+
+;; NO: pipewire-jack timidity -Oj
+;; pw-jack fluidsynth -a jack -g 5 -v
+;; qpwgraph
 
 ;; sudo apt-get install gir1.2-wp-0.4
 (defvar *wp* (gir:require-namespace "Wp" "0.4")) ;; Wire Plumber
@@ -33,6 +39,9 @@
 ;; Subdividing is correct --- but things change position, clicks happen, etc...
 ;; There is definitely "STATE" being passed in... GUI state stuff...
 ;; For example, an LED has state "ON" or "OFF".
+;;
+;; It would be bad practice to tie the GUI strongly to the MIDI library...
+;; I think I should have a callback handler...
 
 (defstruct cairo-color
   (r 0.0d0 :type double-float :read-only t)
@@ -83,6 +92,14 @@
   (prog1 (setf (basic-led-%illuminated basic-led) new-color)
     (queue-redraw)))
 
+(defstruct keytar-key-event
+  "Stores the MIDI key."
+  ;; middle C is note 60 in the C3 convention
+  (note 0 :type integer :read-only t)
+  (event :press :type (member :press :release) :read-only t))
+
+(deftype keytar-event () '(or keytar-key-event))
+
 (defstruct (keytar (:include widget))
   (fill-color (make-cairo-color :r 0.3d0 :g 0.3d0 :b 0.4d0) :type cairo-color :read-only t)
   (stroke-width 0.1d0 :type double-float :read-only t)
@@ -119,10 +136,14 @@
   (pink-square-pressed-color (make-cairo-color :r 0.4d0 :g 0.3d0 :b 0.3d0) :type cairo-color :read-only t)
   (white-cross-color (make-cairo-color :r 0.8d0 :g 0.8d0 :b 0.8d0) :type cairo-color :read-only t)
   (white-cross-pressed-color (make-cairo-color :r 0.35d0 :g 0.3d0 :b 0.3d0) :type cairo-color :read-only t)
+  (callback #'(lambda (keytar-event) (declare (ignore keytar-event))) :type (or null symbol function) :read-only t)
   (%dpad-position nil :type (or null (member :up :down :left :right)) :read-only nil)
+  (midi-notes (make-array 25 :element-type t :initial-contents
+		     '(60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84))
+   :type vector :read-only t)
   (%depressed (make-array 25 :element-type 'bit :initial-element 0)
    :type bit-vector :read-only t)
-  (%buttons (make-array 4 :element-type 'bit :initial-element 0) :type bit-vector :read-only t)
+  (%buttons (make-array 7 :element-type 'bit :initial-element 0) :type bit-vector :read-only t)
   (%led (make-array 4 :element-type 'bit :initial-element 0)))
 
 (defun keytar-dpad-position (keytar)
@@ -135,12 +156,20 @@
     (queue-redraw))
   np)
 
+(defconstant +button-square+ 0)
+(defconstant +button-triangle+ 1)
+(defconstant +button-circle+ 2)
+(defconstant +button-cross+ 3)
+(defconstant +button-start+ 4)
+(defconstant +button-select+ 5)
+(defconstant +button-playstation+ 6)
+
 (defun keytar-button-pressed (keytar index)
-  (check-type index (integer 0 3))
+  (check-type index (integer 0 6))
   (= 1 (aref (keytar-%buttons keytar) index)))
 
 (defun (setf keytar-button-pressed) (value keytar index)
-  (check-type index (integer 0 3))
+  (check-type index (integer 0 6))
   (check-type value boolean)
   (let ((value (if value 1 0)))
     (unless (= value (aref (keytar-%buttons keytar) index))
@@ -151,6 +180,9 @@
 (defun keytar-key (keytar key-number)
   (check-type key-number (integer 0 24))
   (= 1 (aref (keytar-%depressed keytar) key-number)))
+
+(defun keytar-midi-note (keytar key-number)
+  (aref (keytar-midi-notes keytar) key-number))
 
 (defun (setf keytar-key) (value keytar key-number)
   (check-type value boolean)
@@ -174,6 +206,8 @@
       (queue-redraw)))
   value)
 
+
+
 (defun red-led (&key on-click)
   (make-basic-led :on-click on-click))
 
@@ -187,10 +221,24 @@
 (defun basic-led-toggle (basic-led)
   (setf (basic-led-illuminated basic-led) (not (basic-led-illuminated basic-led))))
 
-;; (defparameter *power-led* (red-led :on-click 'basic-led-toggle))
-(defparameter *keytar* (make-keytar))
-;;			:fake-power-led *power-led*))
-;;			:on-click 'basic-led-toggle))
+(defvar *out* *standard-output*)
+(defun handle-keytar-event (keytar-event)
+  (format *out* "~%Got event ~a" keytar-event)
+  (check-type keytar-event keytar-key-event)
+  (cl-alsa-midi/midihelper::fifo-push
+   cl-alsa-midi/midihelper:*writer-fifo*
+   (ecase (keytar-key-event-event keytar-event)
+     (:press
+      (cl-alsa-midi/midihelper:ev-noteon
+       1 (keytar-key-event-note keytar-event)
+       60))
+     (:release
+      (cl-alsa-midi/midihelper:ev-noteoff
+       1 (keytar-key-event-note keytar-event)
+       0)))))
+
+(defparameter *keytar* (make-keytar :callback 'handle-keytar-event))
+
 (defparameter *gui* *keytar*)
 
 ;; 					;(dotimes (x 100)
@@ -463,10 +511,10 @@
 	       (with-slots (r g b a) button-stroke-color
 		 (cl-cairo2:set-source-rgba r g b a))
 	       (cl-cairo2:stroke)))
-	(button 0.98d0 6.1d0 3) ;; 4. White Cross
-	(button 0.4d0 6.6d0 2)  ;; 3. Red Circle
-	(button 1.5d0 6.6d0 0)  ;; 1. Pink Square
-	(button 0.98d0 7.1d0 1)) ;; 2. Green Triangle
+	(button 0.98d0 6.1d0 +button-cross+) ;; 4. White Cross
+	(button 0.4d0 6.6d0 +button-circle+)  ;; 3. Red Circle
+	(button 1.5d0 6.6d0 +button-square+)  ;; 1. Pink Square
+	(button 0.98d0 7.1d0 +button-triangle+)) ;; 2. Green Triangle
 
       (cl-cairo2:set-line-width (/ stroke-width 2))
 
@@ -507,7 +555,22 @@
       (cl-cairo2:stroke)
       (cl-cairo2:move-to 0.88d0 6.0d0)
       (cl-cairo2:line-to 1.08d0 6.2d0)
-      (cl-cairo2:stroke)))
+      (cl-cairo2:stroke)
+
+      ;; Start and select buttons.
+      (flet ((button (x y i)
+	       (cl-cairo2:arc x y 0.16d0 0.0 (* 2 pi))
+	       (with-slots (r g b a) (if (keytar-button-pressed k i)
+					 button-pressed-color
+					 button-base-color)
+		 (cl-cairo2:set-source-rgba r g b a))
+	       (cl-cairo2:fill-preserve)
+	       (with-slots (r g b a) button-stroke-color
+		 (cl-cairo2:set-source-rgba r g b a))
+	       (cl-cairo2:stroke)))
+	(button 2.3d0 6.6d0 +button-start+)
+	(button 3.7d0 6.6d0 +button-select+)
+      )))
   (:method ((grid grid))
     (assert (= (grid-columns grid) 2))
     (assert (= 2 (length (grid-elements grid))))
@@ -562,6 +625,13 @@
 		       (<= x mx (+ x .4d0))
 		       (<= 2d0 my (+ 2d0 3.5d0)))
 	      :do (setf (keytar-key k key-number) (not (keytar-key k key-number)))
+	      :and :do (when (keytar-callback k)
+			 (funcall (keytar-callback k)
+				  (make-keytar-key-event
+				   :note (keytar-midi-note k key-number)
+				   :event (if (keytar-key k key-number)
+					      :press
+					      :release))))
 	      :and :do (return-from click))
 
       ;; White key presses
@@ -570,6 +640,13 @@
 	    :when (and (<= x mx (+ x 1d0))
 		       (<= 0d0 my 5.5d0))
 	      :do (setf (keytar-key k key-number) (not (keytar-key k key-number)))
+	      :and :do (when (keytar-callback k)
+			 (funcall (keytar-callback k)
+				  (make-keytar-key-event
+				   :note (keytar-midi-note k key-number)
+				   :event (if (keytar-key k key-number)
+					      :press
+					      :release))))
 	      :and :do (return-from click))
 
       ;; Dpad directions
@@ -600,11 +677,20 @@
 		 (setf (keytar-button-pressed k i)
 		       (not (keytar-button-pressed k i)))
 		 (return-from click))))
-	(button 0.98d0 6.1d0 3) ;; 4. Green Triangle
-	(button 0.4d0 6.6d0 2)  ;; 3. Red Circle
-	(button 1.5d0 6.6d0 0)  ;; 1. Pink Square
-	(button 0.98d0 7.1d0 1) ;; 2. White Cross
-      )))
+	(button 0.98d0 6.1d0 +button-cross+) ;; 4. White Cross
+	(button 0.4d0 6.6d0 +button-circle+)  ;; 3. Red Circle
+	(button 1.5d0 6.6d0 +button-square+)  ;; 1. Pink Square
+	(button 0.98d0 7.1d0 +button-triangle+))
+
+      (flet ((button (x y i)
+	       (when (< (sqrt (+ (expt (- x mx) 2)
+				 (expt (- y my) 2))) 0.16d0)
+		 (setf (keytar-button-pressed k i)
+		       (not (keytar-button-pressed k i)))
+		 (return-from click))))
+	(button 2.3d0 6.6d0 +button-start+)
+	(button 3.7d0 6.6d0 +button-select+))
+      ))
   (:method ((grid grid) x y)
     (assert (= (grid-columns grid) 2))
     (assert (= 2 (length (grid-elements grid))))

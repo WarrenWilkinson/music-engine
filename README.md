@@ -9,6 +9,18 @@ Similarly, based on intensity and the above, a selection of a visual could be ma
 
 Finally a generic audio visualization could be selected and applied to the visual.
 
+## Notes on the RockBand thing:
+
+ Basically will wire it into the Raspberry Pi's serial bus. This program will convert
+ THAT into ALSA MIDI, so it will appear as an Alsa MIDI device.  That means I need
+ MY program to emulate an alsa midi device...
+
+ http://www.varal.org/ttymidi/
+
+ Okay, SO the device has it's own internal logic, but will present itself
+ as a midi device.
+
+
 ## Notes on the buttons
 
 Tomorrow, maybe synthesize my notes out of this file and proceed with
