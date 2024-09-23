@@ -15,17 +15,108 @@
 
 (asdf:load-system :cl-alsa-midi)
 
+;; TODO, it's time to start working on pipewire's session manager.
+;; I want some my MIDI to automatically connect to fluidsynth...
+;; BUT IF either isn't started, then some LED should be RED.
+
+;; Also, I don't like the "on-click" method of the piano sending the
+;; events... that SHOULD be coming from the instrument itself.
+;; The gui is flaky... and I'd like to be able to trigger things
+;; even if it's not running.
 
 (format t "~%Starting up MIDI interface...")
 ;; Start up the MIDI interface; run `aconnect -lio` to see it.
 (cl-alsa-midi/midihelper:midihelper-start)
 
-;; NO: pipewire-jack timidity -Oj
+;; This might work, but I found timidy to be less reliable: pw-jack timidity -Oj
 ;; pw-jack fluidsynth -a jack -g 5 -v
 ;; qpwgraph
 
 ;; sudo apt-get install gir1.2-wp-0.4
+(defvar *gobject* (gir:require-namespace "GObject"))
+
+;; Why this not work? It feels like it should, maybe needs wp-0.5.
+(gir:invoke (*gobject* "type_from_name") "WpDevice") 
+;; (gir:invoke (*gobject* "g_type_from_name" "WpNode"))
+
 (defvar *wp* (gir:require-namespace "Wp" "0.4")) ;; Wire Plumber
+
+
+;; Find the structure...
+;; (find "WpObjectInterest" (gir:repository-get-infos nil "Wp") :key #'gir:registered-type-info-get-type-name :test #'string-equal)
+;;
+
+;; (defvar *wp-node* (gir:nget *wp* "Node"))
+
+;; In order to get the GTYPE of wireplumber types we need
+;; to link the actual library... they're not exposed via the GIR
+;; for some reason.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (cffi:define-foreign-library wp
+    ;;(:darwin "libwp-0.4.dylib")
+    (:unix "libwireplumber-0.4.so.0")))
+(cffi:use-foreign-library wp)
+(cffi:defcfun (wp-node-get-type "wp_node_get_type") :uint)
+(cffi:defcfun (wp-proxy-get-type "wp_proxy_get_type") :uint)
+
+(defvar *wp-node-g-type* (wp-node-get-type))
+(defvar *wp-proxy-g-type* (wp-proxy-get-type))
+(defparameter *interest* (gir:invoke (*wp* "ObjectInterest" 'new_type) *wp-node-g-type*))
+(defvar *object-manager* (gir:invoke (*wp* "ObjectManager" 'new)))
+
+
+
+
+;; There is a g_object_type_from_name
+
+
+(gir:invoke (*object-manager* "is_installed"))
+(gir:invoke (*object-manager* "add_interest_full") *interest*) ;; why does this fail? It seems correct!
+;; Okay, so I've got wireplumber 0.4.13 (ls /usr/lib/x86_64-linux-gnu/libwir*)
+;; The current version is 0.5.56. Need Ubuntu "The Oracular Oriole" to get that!
+
+;; (gir:struct-info-get-methods
+;; ;;    (slot-value (gir:nget *gtk* "ApplicationWindow")   'gir::info))
+
+(gir:list-constructors-desc (gir:nget *wp*  "ObjectManager"))
+
+;; (defvar *wp-object-interest-struct* (find "WpObjectInterest" (gir:repository-get-infos nil "Wp") :key #'gir:registered-type-info-get-type-name :test #'string-equal))
+;; (gir:struct-info-get-methods *wp-object-interest-struct*)
+;; (gir:list-constructors-desc (gir:nget *wp*  "ObjectInterest"));*wp-object-interest-struct*)
+
+;; (gir:list-constructors-desc (gir:nget *wp*  "ObjectInterest"))
+
+;; (mapcar #'gir:function-info-get-symbol (gir:struct-info-get-methods *wp-object-interest-struct*))
+
+;; ;; (gir:nget *wp*  "ObjectManager")
+;; (gir:struct-info-get-methods
+;;    (slot-value (gir:nget *gtk* "ApplicationWindow")   'gir::info))
+
+;; (gir:struct-info-get-methods *wp-object-interest-struct*)
+
+;; The above is probably fine... we're interesting in ANY node...
+;; Lets get em!
+
+;; (defvar *wp-node* (gir:nget *wp* "Node"))
+
+
+
+;; I think fluidsynth can have the midi port name set... because I think
+;; I might want multiple?  midi.alsa_seq.id  -- Yeah, you can do it.
+;; Also it's a library... I can make a program that does all of them..
+;; including a router and all kinds of effects... interesting.
+;;
+;; Okay, so I think I want an object manager.
+;; I want to be told if fluidsynth comes on or off, and if my keytar is present or
+;; not.
+;;
+;; So yeah, that's the one... bind that, and see if I can be notified when stuff
+;; starts and stops and set an LED based on that.
+;;
+;; So yeah, as soon as Keytar shows up AND so does fluidsynth, the rule should be
+;; to link them. That's the first step.  Eventually it'll be a whole stateful beast.
+
+;; WHOAA a soundfont collection is like a gigabyte!
 
 (defvar *gui-redraw-callback* nil
   "Set to true when the GUI needs to be redrawn." )

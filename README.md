@@ -15,29 +15,56 @@ Finally a generic audio visualization could be selected and applied to the visua
  THAT into ALSA MIDI, so it will appear as an Alsa MIDI device.  That means I need
  MY program to emulate an alsa midi device...
 
+ https://www.instructables.com/PiMiDi-A-Raspberry-Pi-Midi-Box-or-How-I-Learned-to/
  http://www.varal.org/ttymidi/
 
  Okay, SO the device has it's own internal logic, but will present itself
- as a midi device.
+ as a midi device... ttymidi lets you NAME the device, so I should give it
+ a name like "keytar".
+
+ In anycase, building it involves following some simple electrical instructions
+ to convert the MIDI format to Serial format.
+
+## Sound fonts
+
+For fluidsynth... some of these are a gigabyte... how much ram does
+a raspberry pi have?  1, 2, 4 and 8 gb models.  Probably want that 8 gb model.
+
+https://sites.google.com/site/soundfonts4u/
+
+## Notes on the buttons and LEDs
+
+A raspberry pi has like 26 pins...  An Ardiuno has a USB interface and could be
+added.  I could create a MIDI -> USB with this, but at this point I probably
+should just get a MIDI -> USB cable. It would be cheaper.
+
+But this approach might be useful for controlling all the buttons...   but maybe
+it can be done simpler still with an small component PCB? (is that the term? the
+little chips that look like spiders!)
+
+Here is one for LEDS... basically it gives you like a shift register... using less wires
+you can send a series of signals to turn on various lights.  Two of them lets you control
+16 lights.  I probably have closer to 48 lights, so would need like 5.
+
+https://www.ti.com/lit/ds/symlink/tpic6c595.pdf
 
 
-## Notes on the buttons
+A Matrix of x rows and y columns. You need x+y pins.... okay, so 6x6 =>  6+6 = 12 pins... possible?
+The Aurdino has 26 pins.... some amount will be for MIDI unless I put that via USB, which is probably
+smart.  So I think I'm okay for buttons...
+Can also use a Digital GPIO Expander IC.
 
-Tomorrow, maybe synthesize my notes out of this file and proceed with
-trying to connect to wireplumber and ask it some questions.
+https://tutorials-raspberrypi.com/expand-raspberry-pi-gpios-with-i2c-port-expander/
 
-Okay, actually maybe get the drawing inside my window. Figure out how to use cairo
-and just draw everything in a single pass... that'll be fine.
+Okay, so I think I need to mock some of this up.  Somehow... make a circuit diagram.
 
-The drawing library can actually be a CAIRO thing, so I can just set the music engine to some
-state and draw it I guess... 
 
+
+## Notes on music generation...
 
 Need to connect to pipewire... NO!
 Better to connect to wireplumber.. and possibly just via wpctl.
-
 Yeah, on my computer, wireplumber is already running and with a low ID number.
-
 
 For my device, I think I want some LEDs
 1 for power, 1 for cpu is live, some for bootup stages, and some to display the state
