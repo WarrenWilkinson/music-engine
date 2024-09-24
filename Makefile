@@ -2,7 +2,7 @@
 # one is wireplumber AND asound for a control midi interface.
 
 .PHONY : all clean
-all: build/libbuttonloopback.so
+all: build/libbuttonloopback.so build/libmusicengine.so
 
 # The music engine is a shim to control wireplumber via LISP
 build/libmusicengine.so: src/c/musicengine/musicengine.c

@@ -1,4 +1,6 @@
 (defpackage :button
+  (:documentation "Interface to C code for controlling two-state buttons and two-state
+                   LEDs")
   (:use :common-lisp :cffi)
   (:export #:button-state
 	   #:init-buttons))
