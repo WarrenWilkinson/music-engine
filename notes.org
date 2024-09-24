@@ -1,0 +1,29 @@
+
+What is music engine? It's a way for LISP to talk to
+wireplumber... and Also MIDI to send events. That's all it has to be.
+
+ - It provides for the easy creation of MIDI output channels
+   - Lisp can call a function with a name to create another midi output channel.
+   - Lisp can then send MIDI control events to these channels.
+   - (Some channels will be used to control software like FluidSynth or Sooperlooper, others will be things like Guitar -> Midi)
+ - It uses an interface to read the ADCs for the humbuckers
+   - One interface is a loopback interface that Lisp can send data too.
+   - The other interface will be the real hardware interface.
+   - There are knobs lisp can control here: things like octave shifting, midi conversion, turning off strings
+   - This shows up as a Midi Output Channel: one per string
+   - It also shows up as Audio output channels: one per string after processing
+ - It uses an an interface API for all the buttons and proxies them to Lisp.
+   - One interface is a loopback interface that Lisp can control.
+   - The other interface will be the real hardware interface
+ - It provides a wrapper around wireplumber
+   - Lisp is notified when new devices are created.
+   - Lisps preferences for hooking things up are executed.
+
+What is simulator?  It's a GTK application used to 'pretend' to be the hardware.
+
+  - It will tell lisp when various buttons are pressed.
+  - Lisp will tell it what the hardware should look like.
+  - It will display a window.
+
+So what is Lisp doing?  It's tying the two systems together and
+providing the business logic.
