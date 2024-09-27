@@ -5,6 +5,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <wp/wp.h>
+#include <gobject/gobject.h>
 
 // The way this works is as follows:
 // Lisp will tell the shim the NAMES of the nodes it has an interest in.
@@ -39,6 +41,9 @@
 // Remember, actual max length less by 1 to support the null character.
 static char node_interests[MAX_NODE_NAMES][MAX_NODE_NAME_LEN];
 static int node_interests_len = 0;
+static WpObjectManager *wp_object_manager = 0;
+static WpCore *wp_core = 0;
+
 
 void reset_node_interests() {
     memset(node_interests, 0, sizeof(char) * MAX_NODE_NAMES * MAX_NODE_NAME_LEN);
@@ -114,7 +119,7 @@ int musicengine_register_node_interest(char* names, char** out_error_message) {
  * @return returns >= 0 on success or < 0 on error.
  *******************************************************************************/
 int musicengine_get_node_state(char* buffer, int buffer_size, char** out_error_message) {
-    // Write out all the names...
+    // Write out all the names (should be right out ONLY the found names).
     for (int index = 0; index < node_interests_len; index++) {
 	char* c = index == (node_interests_len - 1) ? "\n" : ",";
 	int written = snprintf(buffer, buffer_size, "%s%s", node_interests[index], c);
@@ -124,6 +129,20 @@ int musicengine_get_node_state(char* buffer, int buffer_size, char** out_error_m
 
     // Write out the ports...
     {
+	int had_data = 0;
+	WpIterator *i = wp_object_manager_new_iterator(wp_object_manager);
+	GValue item;// = NULL;
+	while (wp_iterator_next(i, &item)) {
+	    had_data = 1;
+	    int written = snprintf(buffer, buffer_size, "%p,", &item);
+	    buffer+=written;
+	    buffer_size-=written;
+	};
+	if (had_data == 1) {
+	    // backup a character to erase last comma
+	    buffer-=1;
+	    buffer_size+=1;
+	}
 	int written = snprintf(buffer, buffer_size, "\n");
 	buffer+=written;
 	buffer_size-=written;
@@ -191,6 +210,28 @@ int musicengine_wireplumber_init(char** out_error_message) {
     memset(node_interests, 0, sizeof(char) * MAX_NODE_NAMES * MAX_NODE_NAME_LEN);
     node_interests_len = 0;
 
+    wp_init(WP_INIT_ALL);
+
+    GType wp_node_gtype = g_type_from_name("WpNode");
+    if (wp_node_gtype == 0) {
+	*out_error_message = "Failed to find WpNode gtype!";
+	return -1;
+    }
+
+    wp_core = wp_core_new(NULL, NULL);
+    if (wp_core == NULL) {
+	*out_error_message = "Failed to create wp core object!";
+	return -1;
+    }
+
+    wp_object_manager = wp_object_manager_new();
+    if (wp_object_manager == NULL) {
+	*out_error_message = "Failed to create wp object manager!";
+	return -1;
+    }
+    
+    wp_object_manager_add_interest (wp_object_manager, wp_node_gtype, NULL);
+    wp_core_install_object_manager(wp_core, wp_object_manager);
     return 0;
 }
 
@@ -205,6 +246,12 @@ int musicengine_wireplumber_teardown(char** out_error_message) {
 
     memset(node_interests, 0, sizeof(char) * MAX_NODE_NAMES * MAX_NODE_NAME_LEN);
     node_interests_len = 0;
+
+    if (wp_core != NULL) {
+	wp_core_disconnect(wp_core);
+	wp_core = NULL;
+	wp_object_manager = NULL;
+    }
     
     return 0;
 }
