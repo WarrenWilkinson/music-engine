@@ -6,7 +6,9 @@
 	   #:musicengine-open-seq
 	   #:musicengine-close-seq
 	   #:musicengine-open-midi-port
-	   #:musicengine-close-midi-port))
+	   #:musicengine-close-midi-port
+	   #:musicengine-register-node-interest
+	   #:musicengine-get-node-state))
 
 (in-package :musicengine)
 
@@ -17,12 +19,12 @@
 (defmacro musicengine-call (name &rest args)
   (let ((out-error-message-gs (gensym))
 	(return-value-gs (gensym)))
-  `(cffi:with-foreign-object (,out-error-message-gs '(:pointer :string))
-     (let ((,return-value-gs (,name ,@args ,out-error-message-gs)))
-       (if (< ,return-value-gs 0)
-	   (error "Error calling ~a, return value ~a, message was: ~a"
-		  ',name ,return-value-gs (cffi:foreign-string-to-lisp ,out-error-message-gs :count 16))
-	   ,return-value-gs)))))
+    `(cffi:with-foreign-object (,out-error-message-gs ':pointer)
+       (let* ((,return-value-gs (,name ,@args (cffi:make-pointer (cffi:pointer-address ,out-error-message-gs)))))
+	 (if (< ,return-value-gs 0)
+	     (error "~a returned ~a (~a)"
+		    ',name ,return-value-gs (cffi:foreign-string-to-lisp (cffi:mem-ref ,out-error-message-gs :pointer) :max-chars 128))
+	     ,return-value-gs)))))
 
 (cffi:defcfun (c/musicengine-init "musicengine_init") :int
   (error-message (:pointer :string)))
@@ -90,3 +92,53 @@
   (check-type midi musicengine-midi-port)
   (musicengine-call c/musicengine-close-midi-port seq midi)
   t)
+
+(cffi:defcfun (c/musicengine-register-node-interest "musicengine_register_node_interest") :int
+  (names :string)
+  (error-message (:pointer :string)))
+
+(defun musicengine-register-node-interest (&rest names)
+  "Pass the C library the list of node names that we are interested in."
+  (let ((names-string (format nil "~{~a~^,~}" names)))
+    (print names-string)
+    (musicengine-call
+     c/musicengine-register-node-interest
+     names-string)))
+
+(cffi:defcfun (c/musicengine-get-node-state "musicengine_get_node_state") :int
+  (buffer (:pointer :char))
+  (buffer-size :int)
+  (error-message (:pointer :string)))
+
+(defstruct port
+  (node nil :type string :read-only t)
+  (name nil :type string :read-only t)
+  (direction nil :type (member :input :output) :read-only t)
+  (midi-p nil :type boolean :read-only t))
+
+(flet ((split-by-commas (str start end)
+	 (loop :with position = start
+	       :for comma = (position #\, str :start position :end end)
+	       :collect (subseq str position (or comma end))
+	       :do (setf position (+ 1 (or comma end) ))
+	       :until (null comma))))
+  (defun musicengine-get-node-state ()
+    "Returns data about all the stuff. Returns three values
+   1. a list of node names
+   2. a list of ports
+   3. a list of edges (a cons of two ports)"
+    (let* ((buffer-size 2048)
+	   (results (cffi:with-foreign-object (buffer :char buffer-size)
+		      (musicengine-call
+		       c/musicengine-get-node-state
+		       buffer
+		       buffer-size)
+		      (cffi:foreign-string-to-lisp buffer :count buffer-size)))
+	   (first-newline (position #\Newline results))
+	   (second-newline (position #\Newline results :start (1+ first-newline)))
+	   (third-newline (position #\Newline results :start (1+ second-newline)))
+	   (names (split-by-commas results 0 first-newline))
+	   (ports (split-by-commas results (1+ first-newline) second-newline))
+	   (edges (split-by-commas results (1+ second-newline) third-newline)))
+      (values names ports edges))))
+

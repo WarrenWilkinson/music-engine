@@ -5,7 +5,7 @@
 all: build/libbuttonloopback.so build/libmusicengine.so
 
 # The music engine is a shim to control wireplumber via LISP
-build/libmusicengine.so: src/c/musicengine/musicengine.c
+build/libmusicengine.so: src/c/musicengine/alsa.c src/c/musicengine/alsa.h src/c/musicengine/wireplumber.c src/c/musicengine/wireplumber.h src/c/musicengine/musicengine.c 
 	gcc -Wall -shared -o $@ $^ `pkg-config --libs --cflags gobject-2.0 --cflags wireplumber-0.4 --cflags alsa`
 
 build/libbuttonloopback.so: src/c/buttonloopback/buttonloopback.c
