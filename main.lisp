@@ -35,6 +35,8 @@
 ;; sudo apt-get install gir1.2-wp-0.4
 (defvar *gobject* (gir:require-namespace "GObject"))
 
+(defvar *glib* (gir:require-namespace "GLib"))
+
 ;; Why this not work? It feels like it should, maybe needs wp-0.5.
 (gir:invoke (*gobject* "type_from_name") "WpDevice") 
 ;; (gir:invoke (*gobject* "g_type_from_name" "WpNode"))
@@ -48,37 +50,95 @@
 
 ;; (defvar *wp-node* (gir:nget *wp* "Node"))
 
-;; In order to get the GTYPE of wireplumber types we need
-;; to link the actual library... they're not exposed via the GIR
-;; for some reason.
+(gir:nget *wp*  "InitFlags")
+
+(gir:invoke (*wp* "init") (gir:invoke (*wp*  "InitFlags") :all))
+
+(defvar *wp-node-g-type* (gir:invoke (*gobject* "type_from_name") "WpNode") )
+(defvar *context* (gir:invoke (*glib* "main_context_default")))
+(defvar *core* (gir:invoke (*wp* "Core" 'new) *context* nil))
+;; (defvar *wp-proxy-g-type* (wp-proxy-get-type))
+
+(defvar *output* *standard-output*)
+
+;; CALLBACKS always called by the thread's context that was in place when the callback was created... interesting.
+
+(gir:connect *core* "connected" (lambda (&rest args ) (format *output* "~%~s is now connected." args)))
+(gir:connect *core* "disconnected" (lambda (&rest args) (format *output* "~%~s is now disconnected." args)))
+
+
+#|
+;; In order to get the config, I'm finding it's not exposed via the GIR
+;; in 0.4:
+
+;; However, it doesn't seem like it should be needed. In 0.4 you don't
+;; pass in a configuration file, but a GMainContext -- and it should just grab
+;; the default one if it needs it... 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (cffi:define-foreign-library wp
     ;;(:darwin "libwp-0.4.dylib")
     (:unix "libwireplumber-0.4.so.0")))
 (cffi:use-foreign-library wp)
-(cffi:defcfun (wp-node-get-type "wp_node_get_type") :uint)
-(cffi:defcfun (wp-proxy-get-type "wp_proxy_get_type") :uint)
+(cffi:defcfun (c/wp-conf-new-open "wp_conf_new_open") :pointer
+  (path :string)
+  (out :pointer))
+(defun wp-conf-new-open (path)
+  (cffi:with-foreign-object (error-message ':pointer)
+    (let ((conf-object (c/wp-conf-new-open path (cffi:make-pointer (cffi:pointer-address error-message)))))
+      (unless (cffi:null-pointer-p error-message)
+	(error (cffi:foreign-string-to-lisp (cffi:mem-ref error-message :pointer 8)
+					    :max-chars 128)))
+      conf-object)))
+(wp-conf-new-open "")
+|#
 
-(defvar *wp-node-g-type* (wp-node-get-type))
-(defvar *wp-proxy-g-type* (wp-proxy-get-type))
-(defparameter *interest* (gir:invoke (*wp* "ObjectInterest" 'new_type) *wp-node-g-type*))
+					;(cffi:defcfun (wp-proxy-get-type "wp_proxy_get_type") :uint)
+(print "Is my core connected?")
+(print (gir:invoke (*core* "is_connected")))
+
+;; (print (gir:invoke (*context* "iteration") t))
+
+(gir:invoke (*core* "connect"))
+
+(print "Is my core connected?")
+(print (gir:invoke (*core* "is_connected")))
+
+
+(defvar *interest* (gir:invoke (*wp* "ObjectInterest" 'new_type) *wp-node-g-type*))
 (defvar *object-manager* (gir:invoke (*wp* "ObjectManager" 'new)))
+(gir:invoke (*object-manager* "add_interest_full") *interest*) ;; this fails if wp_init hasn't been called.
+
+(print "My g_main_context is...")
+(print (gir:invoke (*core* "get_g_main_context")))
+
+(print "Is my object manager installed?")
+(print (gir:invoke (*object-manager* "is_installed")))
+
+;; Maybe I need some properties?
+
+;; AHA ! The problem was my event loop wasn't running, so nothing happens. If I manually run it several times things work well.
+;; My next task is to understand this gmaincontext loop stuff and figure out what threads I'll have and how to ensure my
+;; gui works without fucking me over.
+(gir:invoke (*core* "install_object_manager") *object-manager*)
+(print "Is my object manager installed?")
+(print (gir:invoke (*object-manager* "is_installed")))
+
+(break "stop here!")
 
 
 
+;; Okay, so wireplumber integration is working better... but still not getting output out yet. Keep trying.
+;; If I totally fail I can use pw-dump and pw-link command line tools to do the same effect.
+;; Still isn't installed... why?
 
-;; There is a g_object_type_from_name
 
-
-(gir:invoke (*object-manager* "is_installed"))
-(gir:invoke (*object-manager* "add_interest_full") *interest*) ;; why does this fail? It seems correct!
 ;; Okay, so I've got wireplumber 0.4.13 (ls /usr/lib/x86_64-linux-gnu/libwir*)
 ;; The current version is 0.5.56. Need Ubuntu "The Oracular Oriole" to get that!
 
 ;; (gir:struct-info-get-methods
 ;; ;;    (slot-value (gir:nget *gtk* "ApplicationWindow")   'gir::info))
 
-(gir:list-constructors-desc (gir:nget *wp*  "ObjectManager"))
+;; (gir:list-constructors-desc (gir:nget *wp*  "ObjectManager"))
 
 ;; (defvar *wp-object-interest-struct* (find "WpObjectInterest" (gir:repository-get-infos nil "Wp") :key #'gir:registered-type-info-get-type-name :test #'string-equal))
 ;; (gir:struct-info-get-methods *wp-object-interest-struct*)
