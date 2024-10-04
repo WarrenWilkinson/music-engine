@@ -5,6 +5,7 @@
 (ql:quickload "cffi") ;; https://github.com/zzkt/osc
 (ql:quickload "cl-gobject-introspection") ;; https://github.com/andy128k/cl-gobject-introspection
 (ql:quickload "cl-cairo2") ;; https://github.com/andy128k/cl-gobject-introspection
+(ql:quickload "lparallel") ;; https://github.com/andy128k/cl-gobject-introspection
 
 (format t "~%Loading music engine...")
 (asdf:initialize-source-registry
@@ -24,9 +25,9 @@
 ;; The gui is flaky... and I'd like to be able to trigger things
 ;; even if it's not running.
 
-(format t "~%Starting up MIDI interface...")
-;; Start up the MIDI interface; run `aconnect -lio` to see it.
-(cl-alsa-midi/midihelper:midihelper-start)
+;; (format t "~%Starting up MIDI interface...")
+;; ;; Start up the MIDI interface; run `aconnect -lio` to see it.
+;; (cl-alsa-midi/midihelper:midihelper-start)
 
 ;; This might work, but I found timidy to be less reliable: pw-jack timidity -Oj
 ;; pw-jack fluidsynth -a jack -g 5 -v
@@ -34,14 +35,14 @@
 
 ;; sudo apt-get install gir1.2-wp-0.4
 (defvar *gobject* (gir:require-namespace "GObject"))
-
 (defvar *glib* (gir:require-namespace "GLib"))
+(defvar *wp* (gir:require-namespace "Wp" "0.4")) ;; Wire Plumber
 
 ;; Why this not work? It feels like it should, maybe needs wp-0.5.
-(gir:invoke (*gobject* "type_from_name") "WpDevice") 
+;; (gir:invoke (*gobject* "type_from_name") "WpDevice") 
 ;; (gir:invoke (*gobject* "g_type_from_name" "WpNode"))
 
-(defvar *wp* (gir:require-namespace "Wp" "0.4")) ;; Wire Plumber
+
 
 
 ;; Find the structure...
@@ -49,22 +50,6 @@
 ;;
 
 ;; (defvar *wp-node* (gir:nget *wp* "Node"))
-
-(gir:nget *wp*  "InitFlags")
-
-(gir:invoke (*wp* "init") (gir:invoke (*wp*  "InitFlags") :all))
-
-(defvar *wp-node-g-type* (gir:invoke (*gobject* "type_from_name") "WpNode") )
-(defvar *context* (gir:invoke (*glib* "main_context_default")))
-(defvar *core* (gir:invoke (*wp* "Core" 'new) *context* nil))
-;; (defvar *wp-proxy-g-type* (wp-proxy-get-type))
-
-(defvar *output* *standard-output*)
-
-;; CALLBACKS always called by the thread's context that was in place when the callback was created... interesting.
-
-(gir:connect *core* "connected" (lambda (&rest args ) (format *output* "~%~s is now connected." args)))
-(gir:connect *core* "disconnected" (lambda (&rest args) (format *output* "~%~s is now disconnected." args)))
 
 
 #|
@@ -93,35 +78,450 @@
 |#
 
 					;(cffi:defcfun (wp-proxy-get-type "wp_proxy_get_type") :uint)
-(print "Is my core connected?")
-(print (gir:invoke (*core* "is_connected")))
+;; (print "Is my core connected?")
+;; (print (gir:invoke (*core* "is_connected")))
 
-;; (print (gir:invoke (*context* "iteration") t))
+;; ;; (print (gir:invoke (*context* "iteration") t))
 
-(gir:invoke (*core* "connect"))
+;; (gir:invoke (*core* "connect"))
 
-(print "Is my core connected?")
-(print (gir:invoke (*core* "is_connected")))
+;; (print "Is my core connected?")
+;; (print (gir:invoke (*core* "is_connected")))
 
 
-(defvar *interest* (gir:invoke (*wp* "ObjectInterest" 'new_type) *wp-node-g-type*))
-(defvar *object-manager* (gir:invoke (*wp* "ObjectManager" 'new)))
-(gir:invoke (*object-manager* "add_interest_full") *interest*) ;; this fails if wp_init hasn't been called.
+;; (defvar *interest* (gir:invoke (*wp* "ObjectInterest" 'new_type) *wp-node-g-type*))
+;; (defvar *object-manager* (gir:invoke (*wp* "ObjectManager" 'new)))
+;; (gir:invoke (*object-manager* "add_interest_full") *interest*) ;; this fails if wp_init hasn't been called.
 
-(print "My g_main_context is...")
-(print (gir:invoke (*core* "get_g_main_context")))
+;; (print "My g_main_context is...")
+;; (print (gir:invoke (*core* "get_g_main_context")))
 
-(print "Is my object manager installed?")
-(print (gir:invoke (*object-manager* "is_installed")))
+;; (print "Is my object manager installed?")
+;; (print (gir:invoke (*object-manager* "is_installed")))
 
-;; Maybe I need some properties?
+;; ;; Maybe I need some properties?
 
-;; AHA ! The problem was my event loop wasn't running, so nothing happens. If I manually run it several times things work well.
-;; My next task is to understand this gmaincontext loop stuff and figure out what threads I'll have and how to ensure my
-;; gui works without fucking me over.
-(gir:invoke (*core* "install_object_manager") *object-manager*)
-(print "Is my object manager installed?")
-(print (gir:invoke (*object-manager* "is_installed")))
+;; ;; AHA ! The problem was my event loop wasn't running, so nothing happens. If I manually run it several times things work well.
+;; ;; My next task is to understand this gmaincontext loop stuff and figure out what threads I'll have and how to ensure my
+;; ;; gui works without fucking me over.
+;; (gir:invoke (*core* "install_object_manager") *object-manager*)
+;; (print "Is my object manager installed?")
+;; (print (gir:invoke (*object-manager* "is_installed")))
+
+
+(defparameter *should-quit* nil)
+(defvar *output* *standard-output*)
+(defvar *wire-plumber-initialized-p* nil)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Wire Plumber State Management
+
+(defstruct (wire-plumber-state-manager (:conc-name "WPSM-"))
+  (current-state+updates (cons nil nil) :type cons :read-only nil)
+  (desired-state nil :type list :read-only nil))
+
+(defun wpsm-apply-updates-to-state (state updates)
+  ;; BOGUS implementation
+  (append state updates))
+
+(defun wpsm-append-updates (wpsm updates)
+  "Push a fact into the wire-plumber state manager in a thread safe way.  This fact will be included on the next invocation of state-manager-compute-changes."
+  (tagbody
+   :try-again
+     (destructuring-bind (&whole whole state . pending-updates) (wpsm-current-state+updates wpsm)
+       (if (eq whole (sb-ext:compare-and-swap
+		      (wpsm-current-state+updates wpsm)
+		      whole
+		      (cons state (append pending-updates updates))))
+	   t
+	   (go :try-again)))))
+  
+(defun wpsm-current-state (wpsm)
+  "Returns the current-state of the wire-plumber (in a thread safe way).  Any pending 'new updates' will be automatically incorporated."
+  (tagbody
+   :try-again
+     (destructuring-bind (&whole whole state . updates) (wpsm-current-state+updates wpsm)
+       (if (null updates)
+	   state
+	   (if (eq whole (sb-ext:compare-and-swap
+			  (wpsm-current-state+updates wpsm)
+			  whole
+			  (cons (wpsm-apply-updates-to-state state updates) nil)))
+	       state
+	       (go :try-again))))))
+
+(defun wire-plumber-state-manager-compute-changes (wpsm cancelled-p-callback)
+  "If cancelled-p-callback returns T, execution will stop."
+  (let ((state (wpsm-current-state wpsm))
+	(desired-state (wpsm-desired-state wpsm)))
+
+    ;; Now that we're done updating, a good time to see if already cancelled!
+    (loop :repeat 5
+	  :do (funcall cancelled-p-callback)
+	  :do (sleep .1d0))
+
+    ;; BOGUS implementation
+    (let ((difference (- (length state) (length desired-state))))
+      (if (> difference 0)
+	  (make-list difference :initial-element :do-something)
+	  :no-changes-necessary))))
+
+(defun wpsm-clear (wpsm)
+  "Clear state and updates from the wire-plumber-state-manager, leaving only the desired state."
+  (let ((new-value (cons nil nil)))
+    (tagbody
+     :try-again
+       (let ((prior (wpsm-current-state+updates wpsm)))
+	 (if (eq prior (sb-ext:compare-and-swap
+			(wpsm-current-state+updates wpsm)
+			prior
+			new-value))
+	     (length prior)
+	     (go :try-again))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Motor Queue tasks
+
+(deftype task-type () '(member :compute-desired-wire-plumber-changes))
+(deftype id () '(and (integer 0) fixnum))
+
+(defvar *id-counter* (list 0))
+(declaim (inline gen-task-id))
+(defun gen-task-id ()
+  (sb-ext:atomic-incf (car *id-counter*)))
+
+(defstruct task-command)
+
+(defstruct (task-with-id-command (:include task-command))
+  (id (error "id must be provided") :type id :read-only t))
+
+(defstruct (start-task-command (:include task-with-id-command))
+  "Request a task should be started."
+  (task-type nil :type task-type :read-only t)
+  (arguments nil :type t :read-only t))
+
+(defstruct (cancel-task-command (:include task-with-id-command))
+  "Specify that a specific task should be cancelled.")
+
+(defstruct (cancel-task-type-command (:include task-command))
+  "Specify that all tasks of a given type should be cancelled."
+  (task-type nil :type task-type :read-only t))
+
+(defstruct (complete-task-command (:include task-with-id-command))
+  "When a task finishes, it should emit this."
+  (result nil :type t :read-only t))
+
+(defstruct (notice-termination-task-command (:include task-with-id-command))
+  "When a task notices it has been cancelled, it should emit this.")
+
+(defstruct motor-queue
+  "Represents parameters to a motor... basically it's a waitqueue.
+
+  buffer is where messages come in/out.  See motor-queue-pop/push.
+  waitqueue and mutex are there for it's protection.
+
+  message-history stores start/cancel messages.  It's a list. Threads
+  are allowed to look at it because it's non-destructively modified.  Tasks,
+  for example can call motor-queue-task-is-cancelled-p to see if they should abort.
+
+  task-start-callbacks is a hashtable mapping task-types to functions of (motor-queue id task-type arguments)
+
+  task-complete-callbacks is a hashtable mapping task-types to functions of (motor-queue id task-type arguments results)"
+  (buffer nil :type list :read-only nil)
+  (waitqueue (sb-thread:make-waitqueue) :type sb-thread:waitqueue :read-only t)
+  (mutex (sb-thread:make-mutex :name "motor queue mutex") :type sb-thread:mutex :read-only t)
+  (message-history nil :type list :read-only nil)
+  (task-start-callbacks (make-hash-table) :type hash-table :read-only t)
+  (task-complete-callbacks (make-hash-table) :type hash-table :read-only t))
+
+(defun motor-queue-push (p message)
+  (check-type p motor-queue)
+  (check-type message task-command)
+  (with-slots (buffer waitqueue mutex) p
+    (sb-thread:with-mutex (mutex)
+      (push message buffer)
+      (sb-thread:condition-notify waitqueue))))
+
+(declaim (inline set-motor-queue-start-callback))
+(defun set-motor-queue-start-callback (mq task fn)
+  (setf (gethash task (motor-queue-task-start-callbacks mq)) fn))
+
+(declaim (inline set-motor-queue-complete-callback))
+(defun set-motor-queue-complete-callback (mq task fn)
+  (setf (gethash task (motor-queue-task-complete-callbacks mq)) fn))
+
+(declaim (inline motor-queue-cancel-tasks-of-type))
+(defun motor-queue-cancel-tasks-of-type (mq task-type)
+  (motor-queue-push mq (make-cancel-task-type-command :task-type task-type)))
+
+(declaim (inline motor-queue-start-task))
+(defun motor-queue-start-task (mq task-type &optional arguments)
+  (let ((id (gen-task-id)))
+    (motor-queue-push mq (make-start-task-command :id id :task-type task-type :arguments arguments))
+    id))
+
+(defun motor-queue-task-is-cancelled-p (p task-id)
+  "Returns T if the given task-id is cancelled.  Worker threads should poll this at convenient times.
+   if they notice it, rather than finishing with complete-task-command they should terminate with
+   notice-termination-task-command."
+  (check-type p motor-queue)
+  (check-type task-id id)
+  (not (null (find-if #'(lambda (message)
+			  (and (typep message 'cancel-task-command)
+			       (= task-id (cancel-task-command-id message))))
+		      (motor-queue-message-history p)))))
+
+(defun motor-queue-pop (p &optional timeout)
+  (check-type p motor-queue)
+  (with-slots (buffer waitqueue mutex) p
+    (sb-thread:with-mutex (mutex)
+      (loop :until buffer
+            :do (or (sb-thread:condition-wait waitqueue mutex :timeout timeout)
+                   ;; Lock not held, must unwind without touching *data*.
+                    (return-from motor-queue-pop nil)))
+      (pop buffer))))
+
+(defun motor-handle-message (p message)
+  (flet ((delete-all-messages-for-id (id)
+	       (check-type id id)
+	       (setf (motor-queue-message-history p)
+		     (remove-if #'(lambda (other-message)
+				    (and (typep other-message 'task-with-id-command)
+					 (= id (task-with-id-command-id other-message))))
+				(motor-queue-message-history p)))))
+	(etypecase message
+	  (notice-termination-task-command
+	   ;; Since the task is gone, we can remove everything we know about it.
+	   (delete-all-messages-for-id (notice-termination-task-command-id message)))
+
+
+	  (complete-task-command
+	   (let* ((id (complete-task-command-id message))
+		  (start-message (find-if #'(lambda (other-message)
+					      (and (typep other-message 'start-task-command)
+						   (= id (start-task-command-id other-message))))
+					  (motor-queue-message-history p))))
+	     (if start-message
+		 (let ((cancel-task-message (find-if #'(lambda (other-message)
+							 (and (typep other-message 'cancel-task-command)
+							      (= id (cancel-task-command-id other-message))))
+						     (motor-queue-message-history p))))
+		   ;; If the task was cancelled, we discard it's result.
+		   (unless cancel-task-message
+		     (let* ((task-type (start-task-command-task-type start-message))
+			    (completion-callback (gethash task-type (motor-queue-task-complete-callbacks p))))
+		       (if (typep completion-callback '(or function symbol))
+			   (funcall completion-callback p id task-type (start-task-command-arguments start-message) (complete-task-command-result message))
+			   (warn "Unknown completed task type: ~a" (start-task-command-task-type start-message))))))
+		 (warn "Completed task ~a, but no start message in history!" id))
+
+	     ;; Since the task is done, we can remove everything we know about it.
+	     (delete-all-messages-for-id id)))
+
+
+	  (cancel-task-type-command
+	   ;; Record a cancellation for request for every started-task with this type.
+	   (let ((target-type (cancel-task-type-command-task-type message)))
+	     ;; DEBUG PRINT
+	     (format *output* "~%Cancelling tasks of type ~a" target-type)
+	     (format *output* "~%~s"
+		     (mapcar #'(lambda (start-command)
+				 (make-cancel-task-command :id (start-task-command-id start-command)))
+			     (remove-if-not #'(lambda (other-message)
+						(and (typep other-message 'start-task-command)
+						     (eq target-type (start-task-command-task-type other-message))))
+					    (motor-queue-message-history p))))
+	     ;; DONE DEBUG PRINT
+	     (setf (motor-queue-message-history p)
+		   (nconc
+		    (mapcar #'(lambda (start-command)
+				(make-cancel-task-command :id (start-task-command-id start-command)))
+			    (remove-if-not #'(lambda (other-message)
+					       (and (typep other-message 'start-task-command)
+						    (eq target-type (start-task-command-task-type other-message))))
+					   (motor-queue-message-history p)))
+		    (motor-queue-message-history p)))))
+
+
+	  (cancel-task-command
+	   (push message (motor-queue-message-history p)))
+
+
+	  (start-task-command
+	   (let* ((task-type (start-task-command-task-type message))
+		  (start-callback (gethash task-type (motor-queue-task-start-callbacks p))))
+	     (if (typep start-callback '(or function symbol))
+		 (progn (push message (motor-queue-message-history p))
+			(funcall start-callback p (start-task-command-id message) task-type (start-task-command-arguments message)))
+		 (warn "Unknown started task type: ~a" (start-task-command-task-type message))))))))
+
+(defun motor-iteration (p)
+  (loop :for message = (motor-queue-pop p 0d0)
+	:until (null message)
+	:do (motor-handle-message p message)))
+
+(defun motor-loop (p)
+  "Should be only one motor-loop per motor queue."
+  (check-type p motor-queue)
+  (loop :for message = (motor-queue-pop p)
+	:when message
+	  :do (motor-handle-message p message)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Main Function
+
+(defun main (motor-queue wpsm)
+  (check-type motor-queue motor-queue)
+  (check-type wpsm  wire-plumber-state-manager)
+  ;; Initialize WirePlumber
+  (unless *wire-plumber-initialized-p*
+    (gir:nget *wp* "InitFlags")
+    (gir:invoke (*wp* "init") (gir:invoke (*wp*  "InitFlags") :all))
+    (setf *wire-plumber-initialized-p* t))
+
+  ;; (defvar *wp-node-g-type* (gir:invoke (*gobject* "type_from_name") "WpNode") )
+  (let* ((main-context (gir:invoke (*glib* "main_context_default")))
+	 (wp-core (gir:invoke (*wp* "Core" 'new) main-context nil)))
+    
+    ;;     (defvar *interest* (gir:invoke (*wp* "ObjectInterest" 'new_type) *wp-node-g-type*))
+    ;; (defvar *object-manager* (gir:invoke (*wp* "ObjectManager" 'new)))
+    ;;     (gir:invoke (*object-manager* "add_interest_full") *interest*)
+    ;;     ;;(defvar *context* )
+    ;; ;; (defvar *core* )
+    ;; ;; ;; (defvar *wp-proxy-g-type* (wp-proxy-get-type))
+
+    ;; ;; 
+
+    ;; ;; CALLBACKS always called by the thread's context that was in place when the callback was created... interesting.
+
+    (gir:connect wp-core "connected"
+		 (lambda (core &rest args)
+		   (declare (ignore args))
+		   (format *output* "~%Core ~s connected." core)
+		   (let* ((node-type (gir:invoke (*gobject* "type_from_name") "WpNode"))
+			  (interest (gir:invoke (*wp* "ObjectInterest" 'new_type) node-type))
+			  (manager (gir:invoke (*wp* "ObjectManager" 'new))))
+		     (gir:invoke (manager "add_interest_full") interest)
+
+		     ;; Okay, so the goal of this wireplumber thing is communication with everything...
+		     ;; I want things in a place where I can poke from the REPL... but I also need to
+		     ;; build up appropriate data-structures that are really private for managing that
+		     ;; communication.  Tough design.
+
+		     ;; Okay, so I think what I want here is "crash only programing".  So when we switch modes
+		     ;; we write a file of the preferences (how things are supposed to be connected and wired up and setup).
+		     ;; All the music manager does vis-a-vis wire-plumber is watch for things that are matched and put them
+		     ;; in the right state.  When music-engine starts up, it loads the preferences file and immediately gets
+		     ;; to work.
+
+		     ;; OKAY so I think I need to express my "setup" as a list of nodes, settings, ports and edges.... on the desire
+		     ;; side it should be cons of thing and :any.  Then I have my current setup, which is a cons of thing and some-identifier.
+		     ;;
+		     ;; The main loop needs to be able to quickly and locklessly ask "is my pipewire setup complete?" and if not, trigger a task (e.g. via
+		     ;; a mutex or broadcast or something) to say -- go and compute a list of pipewire changes necessary.  Since this operation takes time
+		     ;; it should be run outside the main loop.  If the main loop sees any pipewire changes before it completes, it should be able to somehow
+		     ;; cancel that job, or at least trigger it's conclusions as invalid so-as not to act upon it.  That should be the general pattern for
+		     ;; several subsystems.
+		     ;;
+		     ;; Also an idea -- hook up a TEXT-TO-SPEECH agent so that errors can be voiced.  E.g. if some service just isn't running, and I press
+		     ;; a button, it should just say "Couldn't fire fluidsynth named XYZ".
+
+
+		     ;; Okay, how to do cancellable?  The worker needs to periodically check if it's cancelled, or needs to be interrupted.  Checking is safer.
+		     ;; How to communicate that?  At atomic GET/SET is one way, but when do things go away from this list?   What I'm thinking is MAIN
+		     ;; generates a unique ID and says "do the work"... it then creates a thread or task to do that work. Is that a gtask or a lisp side thing?
+		     ;; I think Lisp side..    SO a Lisp thread waits until a task is there... a task is either START (id), CANCEL (id) or FINISHED (id, value) It sleeps until
+		     ;; a message arrives.  If it's FINISHED it pushes the result to another waitqueue or something.   Internally it maintains a "status list" so the worker
+		     ;; threads it has spawned can determine if they are cancelled or not.
+
+		     ;; Or so messages (START id task-name)
+		     ;; (CANCEL id)
+		     ;; (FINISHED id value)
+
+		     (gir:connect manager "installed" (lambda (self)
+							(format *output* "~%Manager ~a is now installed. I should iterate everything once to ensure wpsm is updated!" self)))
+		     (gir:connect manager "object-added" (lambda (self object)
+
+
+							   ;; Push changes up...
+							   (wpsm-append-updates wpsm '((:added-node)))
+
+							   ;; These run in reverse FIFO order..
+							   (motor-queue-start-task motor-queue :compute-desired-wire-plumber-changes)
+							   (motor-queue-cancel-tasks-of-type motor-queue :compute-desired-wire-plumber-changes)
+							   (format *output* "~%Manager ~a sees object appear: ~a" self object)))
+		     (gir:connect manager "object-removed" (lambda (self object)
+							     
+
+							     (wpsm-append-updates wpsm '((:deleted-node)))
+
+							     ;; These run in reverse FIFO order..
+							     (motor-queue-start-task motor-queue :compute-desired-wire-plumber-changes)
+							     (motor-queue-cancel-tasks-of-type motor-queue :compute-desired-wire-plumber-changes)
+							     (format *output* "~%Manager ~a sees object disappear: ~a" self object)))
+		     
+		     (gir:invoke (core "install_object_manager") manager))))
+    (gir:connect wp-core "disconnected" 
+		 (lambda (core &rest args)
+		   (declare (ignore args))
+		   (format *output* "~%Core ~s disconnected" core)))
+
+    ;; Connect wire-plumber core
+    (gir:invoke (wp-core "connect"))
+
+    (format *output* "~%Entering main loop.")
+    ;; Do setup stuff, right?
+    (loop :do (gir:invoke (main-context "iteration") nil)
+	  :do (motor-iteration motor-queue)
+	      ;; :do  handle other things... midi transport?
+	  :do (sleep .5d0) ;; Remove this later...
+	  ;; :do (format *output* "~%core connected: ~s"  (gir:invoke (wp-core "is_connected")))
+	  :until *should-quit*)
+
+    (format *output* "~%Finished.")))
+
+(defvar *mq* (make-motor-queue))
+(defvar *wpsm* (make-wire-plumber-state-manager))
+
+(define-condition cancelled (simple-error) ())
+
+(defvar *kernel* (lparallel:make-kernel 4))
+
+(defun start (&optional (mq *mq*) (wpsm *wpsm*) (kernel *kernel*))
+
+  ;; Setup the book-keeping agent for storing wire-plumber details necessary for computing the differences.
+  ;; THEN setup motor loop stuff that will let the music-engine create, cancel and respond to results from that subprocess.
+  (set-motor-queue-start-callback mq :compute-desired-wire-plumber-changes #'(lambda (mq id task arguments)
+									       (declare (ignore arguments))
+									       (format *output* "~%Recomputing wire-plumber state changes (task ~s, id = ~a)" task id)
+									       (let ((lparallel:*kernel* kernel))
+										 (lparallel:future
+										   (handler-case
+										       (motor-queue-push
+											mq
+											(make-complete-task-command
+											 :id id
+											 :result
+											 (wire-plumber-state-manager-compute-changes
+											  wpsm
+											  #'(lambda ()
+											      (format *output* "~%Was id = ~a cancelled? ~a" id (motor-queue-task-is-cancelled-p mq id))
+											      (when (motor-queue-task-is-cancelled-p mq id)
+												(error 'cancelled))))))
+										     (cancelled ()
+										       (motor-queue-push mq (make-notice-termination-task-command :id id))))))))
+  (set-motor-queue-complete-callback mq :compute-desired-wire-plumber-changes #'(lambda (mq id task arguments results)
+										  (declare (ignore mq arguments))
+										  (format *output* "~%Done task ~s (id = ~a) results = ~a" task id results)))
+
+  (wpsm-clear wpsm)
+
+  ;; Invokes the main loop in a thread so Lisp stays responsive
+  ;; (sb-thread:make-thread #'motor-loop :name "motor-loop" :arguments (list mq))
+  (sb-thread:make-thread #'main :name "music-engine" :arguments (list mq wpsm)))
+
+;; (sb-posix:setenv "GDK_SYNCHRONIZE" "1" 1)
+
 
 (break "stop here!")
 
