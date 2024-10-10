@@ -398,9 +398,10 @@
 		 (lambda (core &rest args)
 		   (declare (ignore args))
 		   (format *output* "~%Core ~s connected." core)
-		   (let* ((node-type (gir:invoke (*gobject* "type_from_name") "WpNode"))
+		   (let* ((node-type (gir:invoke (*gobject* "type_from_name") "WpPort"))
 			  (interest (gir:invoke (*wp* "ObjectInterest" 'new_type) node-type))
 			  (manager (gir:invoke (*wp* "ObjectManager" 'new))))
+		     (gir:invoke (manager "request_object_features") node-type #xffffffff)
 		     (gir:invoke (manager "add_interest_full") interest)
 
 		     ;; Okay, so the goal of this wireplumber thing is communication with everything...
@@ -441,10 +442,56 @@
 		     (gir:connect manager "installed" (lambda (self)
 							(format *output* "~%Manager ~a is now installed. I should iterate everything once to ensure wpsm is updated!" self)))
 		     (gir:connect manager "object-added" (lambda (self object)
+							   (declare (optimize debug))
+							   (format *output* "~%Object ~s added; attempt to walk it's dictionary..." object)
 
+
+
+
+							   ;; OKAY, so I think i should just iterate ports and not nodes.  So basically I just keep track of ports
+							   ;; and current edges.
+							   ;;
+							   ;; THEN my "instruction" can be just (source . dest) where source OR dest can be nil (to exclusively say, disconnected).
+							   ;; The pattern is solved if all matches are "present".  Just keep both lists sorted and this is done in O(n) time.
+							   ;; Use something else to determine if software is running... we just manage patches basically.
+							   
+
+							   ;; I think I need to call this:
+							   ;; void wp_object_manager_request_object_features(WpObjectManager *self, GType object_type, WpObjectFeatures wanted_features)
+							   ;; to tell it I want the object info.
+							   
+							   ;; (loop :for k :in '("node.name" "object.id")
+							   ;; 	 :for v = (gir:invoke (object "get_property") k)
+							   ;; 	 :do (format *output* "~% get ~s on ~s returned ~s" object k v))
+
+							   ;; ;; (format t "~%The node name might be ~s" )
+							   ;; ;; (format t "~%The node name might be ~s" (gir:invoke (object "get_property") "name"))
+							   ;; ;; (format t "~%The node name might be ~s" (gir:invoke (object "get_property") "NAME"))
+							   ;; ;; (format t "~%The node name might be ~s" (gir:invoke (object "get_property") "NODE.NAME"))
+							   
+							   ;; (let ((i (gir:invoke (object "new_properties_iterator"))))
+							   ;;   (format *output* "~%Built iterator ~s" i)
+							   ;;   (when i
+							   ;;     (loop 
+							   ;; 	 :for (has-value property) = (progn
+							   ;; 				       (format *output* "~%iterator is ~a" i)
+							   ;; 				       (let ((v (multiple-value-list (gir:invoke (i "next")))))
+							   ;; 					 (format *output* "~%Got ~a" v)
+							   ;; 					 v))
+							   ;; 	 :while has-value
+							   ;; 	 :for key = (gir:invoke (property "get_key"))
+							   ;; 	 :for value = (gir:invoke (property "get_value"))
+							   ;; 	 :do (format *output* "~%Got ~s -> ~s" key value))))
+
+							   
 
 							   ;; Push changes up...
-							   (wpsm-append-updates wpsm '((:added-node)))
+							   (wpsm-append-updates wpsm `((:added-node ,(gir:invoke (object "get_property") "object.id")
+												    ,(gir:invoke (object "get_property") "node.id")
+												    ,(gir:invoke (object "get_property") "port.id")
+												    ,(gir:invoke (object "get_property") "port.alias")
+												    ,(gir:invoke (object "get_property") "port.direction")
+												    )))
 
 							   ;; These run in reverse FIFO order..
 							   (motor-queue-start-task motor-queue :compute-desired-wire-plumber-changes)
